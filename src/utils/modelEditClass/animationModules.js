@@ -1,21 +1,10 @@
 /**
  * 模型动画模块方法集合
- *
  * @module AnimationModules
- * @description 包含模型动画相关的控制方法
- *
- * @exports {Object} default - 导出的方法集合
- * @property {Function} onStartModelAnimation - 开始执行动画
- * @property {Function} onSetModelAnimation - 设置模型动画参数
- * @property {Function} animationFrameFun - 动画帧更新
- * @property {Function} onClearAnimation - 清除动画
- * @property {Function} onSetRotation - 设置模型旋转动画
- * @property {Function} onSetRotationType - 设置旋转轴和速度
- * @property {Function} getModelAnimationList - 获取模型动画列表
- * @property {Function} getManyModelAnimationList - 获取多模型动画列表
  */
 
 import * as THREE from "three";
+import TWEEN from "@tweenjs/tween.js";
 
 /**
  * 开始执行动画
@@ -126,6 +115,238 @@ function getManyModelAnimationList(animations) {
   }
 }
 
+/**
+ * 多视角数据结构
+ * @typedef {Object} ViewPoint
+ * @property {string} id - 视角唯一标识
+ * @property {string} name - 视角名称
+ * @property {THREE.Vector3} position - 相机位置
+ * @property {THREE.Vector3} target - 相机看向目标
+ * @property {number} duration - 过渡时长(毫秒)
+ * @property {string} easing - 缓动函数名称
+ */
+
+/**
+ * 初始化多视角系统
+ */
+function initViewPoints() {
+  if (!this.viewPoints) {
+    this.viewPoints = []; // 视角列表
+    this.currentViewIndex = -1; // 当前视角索引
+    this.isPlayingViewSequence = false; // 是否正在播放视角序列
+    this.viewTween = null; // 视角过渡补间动画
+  }
+}
+
+/**
+ * 添加视角
+ * @param {string} name - 视角名称
+ * @returns {Object} 新建的视角对象
+ */
+function addViewPoint(name = `视角${Date.now()}`) {
+  this.initViewPoints();
+  const viewPoint = {
+    id: `view_${Date.now()}`,
+    name,
+    position: this.camera.position.clone(),
+    target: this.controls.target.clone(),
+    duration: 1000,
+    easing: "linear"
+  };
+  this.viewPoints.push(viewPoint);
+  return viewPoint;
+}
+
+/**
+ * 删除视角
+ * @param {string} viewId - 视角ID
+ */
+function removeViewPoint(viewId) {
+  const index = this.viewPoints.findIndex(v => v.id === viewId);
+  if (index > -1) {
+    this.viewPoints.splice(index, 1);
+    if (this.currentViewIndex >= this.viewPoints.length) {
+      this.currentViewIndex = this.viewPoints.length - 1;
+    }
+  }
+}
+
+/**
+ * 更新视角信息
+ * @param {string} viewId - 视角ID
+ * @param {Object} updates - 更新的属性
+ */
+function updateViewPoint(viewId, updates) {
+  const viewPoint = this.viewPoints.find(v => v.id === viewId);
+  if (viewPoint) {
+    Object.assign(viewPoint, updates);
+  }
+}
+
+/**
+ * 获取所有视角
+ * @returns {Array} 视角列表
+ */
+function getViewPoints() {
+  this.initViewPoints();
+  return this.viewPoints;
+}
+
+/**
+ * 播放单个视角(带平滑过渡)
+ * @param {string} viewId - 视角ID
+ * @param {boolean} animate - 是否使用动画过渡
+ * @returns {Promise}
+ */
+function playViewPoint(viewId, animate = true) {
+  const self = this;
+  return new Promise((resolve) => {
+    const viewPoint = self.viewPoints.find(v => v.id === viewId);
+    if (!viewPoint) {
+      resolve();
+      return;
+    }
+
+    self.currentViewIndex = self.viewPoints.indexOf(viewPoint);
+
+    if (!animate) {
+      self.camera.position.copy(viewPoint.position);
+      self.controls.target.copy(viewPoint.target);
+      self.controls.update();
+      resolve();
+      return;
+    }
+
+    // 使用 TWEEN 实现平滑过渡
+    if (self.viewTween) {
+      self.viewTween.stop();
+    }
+
+    const startPos = self.camera.position.clone();
+    const startTarget = self.controls.target.clone();
+    const duration = viewPoint.duration || 1000;
+
+    const tweenData = { t: 0 };
+    self.viewTween = new TWEEN.Tween(tweenData)
+      .to({ t: 1 }, duration)
+      .easing(TWEEN.Easing.Linear.None)
+      .onUpdate(function() {
+        const t = tweenData.t;
+        self.camera.position.lerpVectors(startPos, viewPoint.position, t);
+        self.controls.target.lerpVectors(startTarget, viewPoint.target, t);
+        self.controls.update();
+      })
+      .onComplete(function() {
+        self.camera.position.copy(viewPoint.position);
+        self.controls.target.copy(viewPoint.target);
+        self.controls.update();
+        resolve();
+      })
+      .start();
+  });
+}
+
+/**
+ * 播放视角序列(多视角动画)
+ * @param {Array<string>} viewIds - 视角ID数组，不指定则播放全部视角
+ * @param {Object} options - 播放选项
+ * @param {boolean} options.loop - 是否循环播放
+ * @param {number} options.interval - 两个视角间的停留时长(毫秒)
+ * @returns {Promise}
+ */
+function playViewSequence(viewIds = null, options = {}) {
+  const self = this;
+  return new Promise((resolve) => {
+    self.initViewPoints();
+    
+    const { loop = false, interval = 500 } = options;
+    const sequence = viewIds 
+      ? self.viewPoints.filter(v => viewIds.includes(v.id))
+      : self.viewPoints;
+
+    if (sequence.length === 0) {
+      resolve();
+      return;
+    }
+
+    self.isPlayingViewSequence = true;
+
+    const playSequenceStep = (index) => {
+      if (!self.isPlayingViewSequence) {
+        resolve();
+        return;
+      }
+
+      if (index >= sequence.length) {
+        if (loop) {
+          playSequenceStep(0);
+        } else {
+          self.isPlayingViewSequence = false;
+          resolve();
+        }
+        return;
+      }
+
+      const viewPoint = sequence[index];
+      self.playViewPoint(viewPoint.id, true).then(() => {
+        // 在视角间停留
+        setTimeout(() => {
+          playSequenceStep(index + 1);
+        }, interval);
+      });
+    };
+
+    playSequenceStep(0);
+  });
+}
+
+/**
+ * 停止视角序列播放
+ */
+function stopViewSequence() {
+  this.isPlayingViewSequence = false;
+  if (this.viewTween) {
+    this.viewTween.stop();
+    this.viewTween = null;
+  }
+}
+
+/**
+ * 获取缓动函数对象路径
+ * @param {string} easingName - 缓动函数名称
+ * @returns {Function}
+ */
+function getEasingFunction(easingName = "Linear.None") {
+  const parts = easingName.split(".");
+  if (parts.length === 2) {
+    const [type, name] = parts;
+    return TWEEN.Easing[type] && TWEEN.Easing[type][name] 
+      ? TWEEN.Easing[type][name] 
+      : TWEEN.Easing.Linear.None;
+  }
+  return TWEEN.Easing.Linear.None;
+}
+
+/**
+ * 下一个视角
+ */
+function nextViewPoint() {
+  this.initViewPoints();
+  if (this.viewPoints.length === 0) return;
+  this.currentViewIndex = (this.currentViewIndex + 1) % this.viewPoints.length;
+  this.playViewPoint(this.viewPoints[this.currentViewIndex].id, true);
+}
+
+/**
+ * 上一个视角
+ */
+function prevViewPoint() {
+  this.initViewPoints();
+  if (this.viewPoints.length === 0) return;
+  this.currentViewIndex = (this.currentViewIndex - 1 + this.viewPoints.length) % this.viewPoints.length;
+  this.playViewPoint(this.viewPoints[this.currentViewIndex].id, true);
+}
+
 export default {
   onStartModelAnimation,
   onSetModelAnimation,
@@ -135,5 +356,17 @@ export default {
   onSetRotationType,
   rotationAnimationFun,
   getModelAnimationList,
-  getManyModelAnimationList
+  getManyModelAnimationList,
+  // 新增多视角相关方法
+  initViewPoints,
+  addViewPoint,
+  removeViewPoint,
+  updateViewPoint,
+  getViewPoints,
+  playViewPoint,
+  playViewSequence,
+  stopViewSequence,
+  getEasingFunction,
+  nextViewPoint,
+  prevViewPoint
 };

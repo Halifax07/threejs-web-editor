@@ -9,7 +9,14 @@ export const useMeshEditStore = defineStore("useMeshEditStore", {
     // 当前drag拖拽类型:oneModel:单模型  manyModel:多模型 geometry:几何体模型 tags:3d文本标签
     modelType: "oneModel",
     // 是否处于预览/交互模式
-    isPreviewMode: false
+    isPreviewMode: false,
+    // 视角配置
+    viewPointConfig: {
+      viewPoints: [],
+      autoPlayEnabled: false,
+      autoPlayLoop: false,
+      autoPlayInterval: 500 // 视角间隔(毫秒)
+    }
   }),
   getters: {
     selectMeshUuid: state => state.selectMesh.uuid
@@ -26,6 +33,14 @@ export const useMeshEditStore = defineStore("useMeshEditStore", {
     },
     setPreviewMode(isPreviewMode) {
       this.isPreviewMode = isPreviewMode;
+    },
+    // 更新视角配置
+    updateViewPointConfig(config) {
+      this.viewPointConfig = Object.assign(this.viewPointConfig, config);
+    },
+    // 获取视角配置
+    getViewPointConfig() {
+      return this.viewPointConfig;
     }
   }
 });
