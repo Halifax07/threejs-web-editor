@@ -152,14 +152,11 @@ class renderModel {
 
   init() {
     return new Promise(async resolve => {
-      //初始化渲染器
       this.initRender();
-      //初始化相机
       this.initCamera();
-      //初始化场景
       this.initScene();
-      //初始化控制器，控制摄像头,控制器一定要在渲染器后
       this.initControls();
+      this.initViewPoints();  // 添加这一行
       // 创建辅助线
       this.createHelper();
       // 创建灯光
@@ -228,7 +225,7 @@ class renderModel {
         this.effectComposer.render();
         this.controls.update();
       }
-      TWEEN.update();
+      TWEEN.update();  // ✅ 这一行很重要，驱动所有 TWEEN 动画
       this.shaderModules.updateAllShaderTime();
       // 3d标签渲染器
       if (this.dragTagList.length) {

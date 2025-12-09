@@ -54,6 +54,10 @@
         <div v-show="activeTab == 'EditShader'">
           <edit-shader ref="shader"></edit-shader>
         </div>
+        <!-- 多视角 -->
+        <div v-show="activeTab == 'viewpoint'">
+          <edit-view-point ref="viewpoint"></edit-view-point>
+        </div>
       </el-scrollbar>
     </div>
   </div>
@@ -70,6 +74,7 @@ import EditGeometry from "./EditGeometry.vue";
 import EditMoreModel from "./EditMoreModel.vue";
 import EditTags from "./EditTags.vue";
 import EditShader from "./EditShader.vue";
+import EditViewPoint from "./EditViewPoint.vue";
 const { $bus } = getCurrentInstance().proxy;
 
 const panelTabs = [
@@ -122,6 +127,11 @@ const panelTabs = [
     name: "着色器",
     key: "EditShader",
     icon: "Loading"
+  },
+  {
+    name: "多视角",
+    key: "viewpoint",
+    icon: "View"
   }
 ];
 
@@ -136,6 +146,7 @@ const geometry = ref(null);
 const tags = ref(null);
 const more = ref(null);
 const shader = ref(null);
+const viewpoint = ref(null);
 onMounted(() => {
   $bus.on("update-tab", chooseTab => {
     activeTab.value = chooseTab;
