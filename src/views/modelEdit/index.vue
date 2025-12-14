@@ -143,7 +143,7 @@ const onDragDrop = async e => {
   }
 
   // 处理多模型
-  if (store.modelType === "manyModel") {
+  if (activeDragManyModel && activeDragManyModel.id) {
     updateDragPosition(activeDragManyModel);
 
     try {
@@ -283,6 +283,11 @@ onMounted(async () => {
   // 模型加载进度条
   store.modelApi.onProgress((progressNum, totalSize) => {
     progress.value = Number(((progressNum / totalSize) * 100).toFixed(0));
+  });
+
+  // 注册模型切换回调，用于点击场景模型时更新UI
+  store.modelApi.onSwitchModelCallback(() => {
+      $bus.emit(UPDATE_MODEL);
   });
 
   const load = await modelApi.init();

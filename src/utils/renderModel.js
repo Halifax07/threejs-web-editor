@@ -1,4 +1,5 @@
 import * as THREE from "three"; //导入整个 three.js核心库
+import { toRaw } from "vue";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls"; //导入控制器模块，轨道控制器
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader"; //导入GLTF模块，模型解析器,根据文件格式来定
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -148,6 +149,12 @@ class renderModel {
     this.lightModules = new lightModules();
     // 材质模块实例
     this.materialModules = new materialModules();
+    
+    // 拖拽移动相关
+    this.isDragging = false;
+    this.dragPlane = new THREE.Plane();
+    this.dragOffset = new THREE.Vector3();
+    this.dragIntersection = new THREE.Vector3();
   }
 
   init() {
@@ -245,6 +252,71 @@ class renderModel {
     // 鼠标移动（处理光标样式）
     this.onMouseMoveListener = this.onMouseMove.bind(this);
     this.container.addEventListener("mousemove", this.onMouseMoveListener);
+    
+    // 鼠标按下（处理拖拽）
+    this.onMouseDownListener = this.onMouseDown.bind(this);
+    this.container.addEventListener("mousedown", this.onMouseDownListener);
+    
+    // 鼠标抬起（结束拖拽）
+    this.onMouseUpListener = this.onMouseUp.bind(this);
+    window.addEventListener("mouseup", this.onMouseUpListener);
+
+    // 鼠标滚轮（处理缩放）
+    this.onWheelListener = this.onWheel.bind(this);
+    this.container.addEventListener("wheel", this.onWheelListener, { passive: false, capture: true });
+  }
+
+  // 鼠标按下事件
+  onMouseDown(event) {
+    if (event.shiftKey && this.model) {
+      const { clientHeight, clientWidth, offsetLeft, offsetTop } = this.container;
+      this.mouse.x = ((event.clientX - offsetLeft) / clientWidth) * 2 - 1;
+      this.mouse.y = -((event.clientY - offsetTop) / clientHeight) * 2 + 1;
+
+      this.raycaster.setFromCamera(this.mouse, this.camera);
+
+      // 检查是否点击到了当前选中的模型
+      const intersects = this.raycaster.intersectObject(this.model, true);
+
+      if (intersects.length > 0) {
+        this.isDragging = true;
+        this.controls.enabled = false;
+
+        // 设置拖拽平面，使其面向相机，并经过点击点
+        this.dragPlane.setFromNormalAndCoplanarPoint(
+          this.camera.getWorldDirection(this.dragPlane.normal).negate(),
+          intersects[0].point
+        );
+
+        // 计算偏移量
+        if (this.raycaster.ray.intersectPlane(this.dragPlane, this.dragIntersection)) {
+          this.dragOffset.subVectors(this.model.position, this.dragIntersection);
+        }
+      }
+    }
+  }
+
+  // 鼠标抬起事件
+  onMouseUp() {
+    if (this.isDragging) {
+      this.isDragging = false;
+      this.controls.enabled = true;
+    }
+  }
+
+  // 鼠标滚轮事件
+  onWheel(event) {
+    if (this.model) {
+      // 无论鼠标是否在模型上，只要有选中模型，就拦截滚轮事件进行缩放
+      event.preventDefault();
+      event.stopPropagation();
+
+      // 向上滑(deltaY < 0)放大，向下滑(deltaY > 0)缩小
+      const scaleFactor = 0.1;
+      const delta = event.deltaY < 0 ? (1 + scaleFactor) : (1 - scaleFactor);
+      
+      this.model.scale.multiplyScalar(delta);
+    }
   }
 
   // 鼠标移动事件处理
@@ -254,6 +326,14 @@ class renderModel {
     this.mouse.y = -((event.clientY - offsetTop) / clientHeight) * 2 + 1;
 
     this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    // 处理拖拽移动
+    if (this.isDragging && this.model) {
+      if (this.raycaster.ray.intersectPlane(this.dragPlane, this.dragIntersection)) {
+        this.model.position.copy(this.dragIntersection).add(this.dragOffset);
+      }
+      return;
+    }
 
     let model = this.model;
     if (this.geometryGroup.children.length) {
@@ -295,7 +375,7 @@ class renderModel {
     this.css3dControls.update();
   }
   // 加载模型
-  loadModel({ filePath, fileType, decomposeName }) {
+  loadModel({ filePath, fileType, decomposeName }, clearScene = true) {
     return new Promise(resolve => {
       this.loadingStatus = false;
       let loader;
@@ -308,22 +388,28 @@ class renderModel {
       } else {
         loader = this.fileLoaderMap[fileType];
       }
-      this.model?.dispose()
+      if (clearScene) {
+        this.model?.dispose()
+      }
       loader.load(
         filePath,
         result => {
           switch (fileType) {
             case "glb":
               this.model = result.scene;
+              if (result.animations) this.model.animations = result.animations;
               break;
             case "fbx":
               this.model = result;
+              if (result.animations) this.model.animations = result.animations;
               break;
             case "gltf":
               this.model = result.scene;
+              if (result.animations) this.model.animations = result.animations;
               break;
             case "obj":
               this.model = result;
+              if (result.animations) this.model.animations = result.animations;
               break;
             case "stl":
               const material = new THREE.MeshStandardMaterial();
@@ -538,7 +624,7 @@ class renderModel {
 
     this.effectComposer.addPass(renderPass);
 
-    this.outlinePass = new OutlinePass(new THREE.Vector2(clientWidth, clientHeight), this.model, this.camera);
+    this.outlinePass = new OutlinePass(new THREE.Vector2(clientWidth, clientHeight), this.scene, this.camera);
     this.outlinePass.visibleEdgeColor = new THREE.Color("#FF8C00"); // 可见边缘的颜色
     this.outlinePass.hiddenEdgeColor = new THREE.Color("#8a90f3"); // 不可见边缘的颜色
     this.outlinePass.edgeGlow = 2; // 发光强度
@@ -597,8 +683,13 @@ class renderModel {
     this.shaderPass.needsSwap = true;
     this.shaderPass.name = "ShaderColor";
   }
+  // 注册模型切换回调
+  onSwitchModelCallback(callback) {
+    this.switchModelCallback = callback;
+  }
+
   // 切换模型
-  onSwitchModel(model) {
+  onSwitchModel(model, clearScene = true) {
     return new Promise(async (resolve, reject) => {
       try {
         // 加载几何模型
@@ -611,9 +702,11 @@ class renderModel {
           this.outlinePass.renderScene = this.geometryGroup;
           resolve();
         } else {
-          this.clearSceneModel();
+          if (clearScene) {
+            this.clearSceneModel();
+          }
           // 加载模型
-          const load = await this.loadModel(model);
+          const load = await this.loadModel(model, clearScene);
           this.outlinePass.renderScene = this.model;
           // 模型加载成功返回 true
           resolve({ load, filePath: model.filePath });
@@ -726,6 +819,9 @@ class renderModel {
     cancelAnimationFrame(this.animationFrame);
     this.container.removeEventListener("click", this.onMouseClickListener);
     this.container.removeEventListener("mousemove", this.onMouseMoveListener);
+    this.container.removeEventListener("mousedown", this.onMouseDownListener);
+    this.container.removeEventListener("wheel", this.onWheelListener);
+    window.removeEventListener("mouseup", this.onMouseUpListener);
     window.removeEventListener("resize", this.onWindowResizesListener);
     this.scene.traverse(v => {
       if (v.type === "Mesh") {
@@ -826,6 +922,60 @@ class renderModel {
     this.activeDragManyModel = {};
     // 清除事件数据
     this.clearEventData();
+  }
+
+  // 移除指定模型
+  removeModel(model) {
+    if (!model) return;
+    console.log("Removing model:", model);
+
+    // 递归释放资源
+    model.traverse(v => {
+      if (v.isMesh) {
+        if (v.geometry) v.geometry.dispose();
+        if (v.material) {
+          if (Array.isArray(v.material)) {
+            v.material.forEach(m => m.dispose());
+          } else {
+            v.material.dispose();
+          }
+        }
+      }
+    });
+
+    // 从父对象中移除
+    if (model.parent) {
+      model.parent.remove(model);
+    }
+
+    // 如果是当前选中的模型，清除选中状态
+    // 使用 toRaw 确保比较的是原始对象
+    const rawModel = toRaw(model);
+    const rawCurrentModel = toRaw(this.model);
+    
+    if (rawCurrentModel === rawModel) {
+      this.model = null;
+      this.modelMaterialList = [];
+      this.originalMaterials.clear();
+      this.modelAnimation = [];
+      if (this.transformControls) {
+        this.transformControls.detach();
+      }
+      this.outlinePass.selectedObjects = [];
+    }
+    
+    // 如果选中的是该模型的子网格，也需要清除选中状态
+    if (this.outlinePass.selectedObjects.length > 0) {
+        let selected = this.outlinePass.selectedObjects[0];
+        let root = selected;
+        while(root.parent && root !== model && root.parent !== null) {
+            root = root.parent;
+        }
+        if (root === model) {
+            this.outlinePass.selectedObjects = [];
+            if (this.transformControls) this.transformControls.detach();
+        }
+    }
   }
 
   // 清除场景模型数据
@@ -946,15 +1096,19 @@ class renderModel {
             switch (fileType) {
               case "glb":
                 manyModel = result.scene;
+                if (result.animations) manyModel.animations = result.animations;
                 break;
               case "fbx":
                 manyModel = result;
+                if (result.animations) manyModel.animations = result.animations;
                 break;
               case "gltf":
                 manyModel = result.scene;
+                if (result.animations) manyModel.animations = result.animations;
                 break;
               case "obj":
                 manyModel = result;
+                if (result.animations) manyModel.animations = result.animations;
                 break;
               case "stl":
                 const material = new THREE.MeshStandardMaterial();
@@ -981,12 +1135,12 @@ class renderModel {
               ...manyModel.userData
             };
             this.manyModelGroup.add(manyModel);
-            this.model = this.manyModelGroup;
-            this.outlinePass.renderScene = this.model;
-            this.materialModules.getModelMaterialList();
-            // 需要辉光的材质
-            this.glowMaterialList = this.modelMaterialList.map(v => v.name);
-            this.scene.add(this.model);
+            
+            // 确保多模型组在场景中
+            if (!this.scene.getObjectByProperty('uuid', this.manyModelGroup.uuid)) {
+                this.scene.add(this.manyModelGroup);
+            }
+
             this.loadingStatus = true;
 
             resolve({ load: true });
@@ -1004,15 +1158,6 @@ class renderModel {
         ElMessage.warning("当前角度无法获取鼠标位置请调整“相机角度”在添加");
       }
     });
-  }
-  // 选择多模型切换
-  chooseManyModel(uuid) {
-    const chooseModel = this.scene.children.find(v => v.uuid == uuid);
-    // 设置当前编辑模型
-    this.model = chooseModel;
-    this.outlinePass.renderScene = this.model;
-    // 更新当前编辑的模型材质列表
-    this.materialModules.getModelMaterialList();
   }
 }
 

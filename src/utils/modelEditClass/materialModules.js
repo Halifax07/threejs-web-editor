@@ -45,6 +45,30 @@ export default class MaterialModules {
    */
   setMaterialMeshParams(mesh, index) {
     try {
+      if (mesh.userData.isProcessed) {
+        const { mapId, uuid, userData, type, name, isMesh, visible } = mesh;
+        const { color, wireframe, depthWrite, opacity } = mesh.material;
+
+        const meshData = {
+          mapId,
+          uuid,
+          userData,
+          type,
+          name,
+          isMesh,
+          visible,
+          material: { color, wireframe, depthWrite, opacity }
+        };
+
+        store.modelApi.modelMaterialList.push(meshData);
+        
+        // 恢复原始材质引用（如果有缓存）
+        if (mesh.userData.originalMaterial) {
+             store.modelApi.originalMaterials.set(mesh.uuid, mesh.userData.originalMaterial);
+        }
+        return;
+      }
+
       const newMesh = mesh.clone();
       mesh.userData = {
         ...mesh.userData,
@@ -76,6 +100,11 @@ export default class MaterialModules {
       const cloneMaterial = mesh.material.clone();
       cloneMaterial.userData.mapId = `${mesh.name}_${index}`;
       store.modelApi.originalMaterials.set(mesh.uuid, cloneMaterial);
+      
+      // 标记已处理并缓存原始材质
+      mesh.userData.isProcessed = true;
+      mesh.userData.originalMaterial = cloneMaterial;
+
     } catch (error) {
       console.error("处理材质参数失败:", error);
       throw error;
@@ -331,24 +360,86 @@ export default class MaterialModules {
   onMouseClickModel(event) {
     try {
       const { clientHeight, clientWidth, offsetLeft, offsetTop } = store.modelApi.container;
-      const { mouse, geometryGroup, raycaster, camera, outlinePass, transformControls } = store.modelApi;
+      const { mouse, geometryGroup, raycaster, camera, outlinePass, transformControls, manyModelGroup, scene, planeGeometry } = store.modelApi;
       mouse.x = ((event.clientX - offsetLeft) / clientWidth) * 2 - 1;
       mouse.y = -((event.clientY - offsetTop) / clientHeight) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
 
-      let model = store.modelApi.model;
-      if (geometryGroup.children.length) {
-        model = geometryGroup;
-      }
-      if (!model) return false;
+      // 使用场景中的所有对象进行射线检测，确保能选中任何模型
+      const objectsToIntersect = toRaw(scene).children;
 
       const intersects = raycaster
-        .intersectObjects(toRaw(model.children), true)
-        .filter(item => item.object.isMesh && item.object.material);
+        .intersectObjects(objectsToIntersect, true)
+        .filter(item => item.object.isMesh && item.object.material && item.object.visible);
 
       if (intersects.length > 0) {
         const intersectedObject = intersects[0].object;
+
+        // 查找根模型
+        let rootModel = intersectedObject;
+        // 使用 toRaw 确保比较的是原始对象
+        const rawScene = toRaw(scene);
+        const rawManyModelGroup = toRaw(manyModelGroup);
+        const rawGeometryGroup = toRaw(geometryGroup);
+
+        while (rootModel.parent && toRaw(rootModel.parent) !== rawScene && toRaw(rootModel.parent) !== rawManyModelGroup && toRaw(rootModel.parent) !== rawGeometryGroup) {
+            rootModel = rootModel.parent;
+        }
+        
+        // 如果 rootModel 的父级是 null，说明它可能已经被移除了，或者逻辑有误
+        // 但如果是顶层对象，parent 应该是 scene/manyModelGroup/geometryGroup
+        // 如果 parent 是 null，说明它不在场景图中？
+        if (!rootModel.parent) {
+             // 尝试向上查找直到没有 parent
+             let temp = intersectedObject;
+             while(temp.parent) {
+                 temp = temp.parent;
+                 if (temp === toRaw(scene) || temp === toRaw(manyModelGroup) || temp === toRaw(geometryGroup)) {
+                     // 找到了容器，那么 temp 的子级就是 rootModel
+                     // 但上面的循环应该已经处理了这个
+                     break;
+                 }
+             }
+        }
+
+        // 忽略变换控制器和地面
+        if ((transformControls && rootModel === toRaw(transformControls)) || rootModel === toRaw(planeGeometry)) {
+            // 如果点击的是控制器或地面，不进行模型切换和选中操作
+            // 可以选择在这里清除选中，或者什么都不做
+            // 这里选择什么都不做，保持当前状态
+            return;
+        }
+
+        // Ctrl + 点击 删除模型
+        if (event.ctrlKey) {
+            console.log("Ctrl+Click detected. RootModel:", rootModel);
+            // 确保调用的是 store.modelApi 上的 removeModel 方法
+            if (typeof store.modelApi.removeModel === 'function') {
+                store.modelApi.removeModel(rootModel);
+            } else {
+                console.error("removeModel method not found on store.modelApi");
+            }
+            return;
+        }
+
+        // 切换上下文
+        if (rootModel !== toRaw(store.modelApi.model) && rootModel !== toRaw(geometryGroup)) {
+             store.modelApi.model = rootModel;
+             store.modelApi.modelAnimation = rootModel.animations || [];
+             store.modelApi.modelMaterialList = [];
+             store.modelApi.originalMaterials.clear();
+             this.getModelMaterialList();
+             
+             if (transformControls) {
+                 transformControls.detach();
+             }
+
+             // 触发模型切换回调，通知UI更新
+             if (store.modelApi.switchModelCallback) {
+                 store.modelApi.switchModelCallback();
+             }
+        }
 
         // 如果处于预览模式，仅触发事件，不进行选中操作
         if (store.isPreviewMode) {
@@ -362,7 +453,7 @@ export default class MaterialModules {
           selectedObjects: [intersectedObject]
         });
 
-        store.selectMeshAction(intersectedObject);
+        store.selectMeshAction(toRaw(intersectedObject));
 
         if (transformControls) {
           const boundingBox = new THREE.Box3().setFromObject(intersectedObject);

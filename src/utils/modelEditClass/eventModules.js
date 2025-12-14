@@ -8,6 +8,7 @@
 import * as THREE from "three";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useMeshEditStore } from "@/store/meshEditStore";
+import { toRaw } from "vue";
 import TWEEN from "@tweenjs/tween.js";
 
 // 存储模型事件配置 Map<uuid, config>
@@ -33,7 +34,8 @@ function saveSceneState(modelApi) {
   
   // 保存所有网格的状态
   originalSceneState.meshStates.clear();
-  modelApi.model.traverse((obj) => {
+  // 使用 scene.traverse 而不是 model.traverse，以确保覆盖所有模型
+  modelApi.scene.traverse((obj) => {
     if (obj.isMesh || obj.isGroup) {
       originalSceneState.meshStates.set(obj.uuid, {
         visible: obj.visible,
@@ -68,7 +70,8 @@ function restoreSceneState(modelApi) {
   }
 
   // 恢复网格状态
-  modelApi.model.traverse((obj) => {
+  // 同样遍历整个场景
+  modelApi.scene.traverse((obj) => {
     if ((obj.isMesh || obj.isGroup) && originalSceneState.meshStates.has(obj.uuid)) {
       const state = originalSceneState.meshStates.get(obj.uuid);
       obj.visible = state.visible;
@@ -125,7 +128,10 @@ function getMeshEventData(uuid) {
  */
 function triggerMeshEvent(mesh) {
   const store = useMeshEditStore();
-  const config = meshEventMap.get(mesh.uuid);
+  // 确保使用原始对象获取配置
+  const rawMesh = toRaw(mesh);
+  const config = meshEventMap.get(rawMesh.uuid);
+  
   if (!config || config.clickEvent === "none") return;
 
   switch (config.clickEvent) {

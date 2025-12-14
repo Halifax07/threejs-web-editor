@@ -181,8 +181,7 @@ const activeMapId = ref(null);
 const event = ref(null);
 
 const optionDisabled = computed(() => {
-  const activeMesh = state.modelMaterialList.find(v => v.uuid == state.selectMeshUuid) || {};
-  return activeMesh.uuid ? "" : "disabled";
+  return store.selectMeshUuid ? "" : "disabled";
 });
 
 const state = reactive({
