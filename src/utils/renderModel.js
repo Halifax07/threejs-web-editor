@@ -14,7 +14,7 @@ import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { CSS3DRenderer } from "three/addons/renderers/CSS3DRenderer.js";
+import { CSS3DRenderer, CSS3DObject } from "three/addons/renderers/CSS3DRenderer.js";
 import { USDZExporter } from "three/addons/exporters/USDZExporter.js";
 import { ElMessage } from "element-plus";
 import { onlyKey, getAssetsFile } from "@/utils/utilityFunction";
@@ -141,6 +141,10 @@ class renderModel {
     this.dragTagList = [];
     // 自定义数据标注（按对象 uuid 存储），结构：{ [uuid]: [{ id, name, value, unit }] }
     this.customDataMap = {};
+    // 自定义数据对应的 3D 文本对象（uuid -> CSS3DObject）
+    this.customDataLabelMap = {};
+    // 当前选中的用于显示自定义数据的对象 uuid（通常是子模型）
+    this.activeCustomDataUuid = null;
     // 当前拖拽模型信息
     this.activeDragManyModel = {};
     // 背景模块实例
@@ -166,6 +170,134 @@ class renderModel {
    * 自定义数据标注相关方法
    * ======================
    */
+
+  /**
+   * 确保 CSS3DRenderer 已挂载到容器（用于自定义数据标签）
+   */
+  ensureCss3DRendererMountedForCustomData() {
+    if (!this.css3DRenderer || !this.container) return;
+    if (!this.css3DRenderer.domElement.parentNode) {
+      this.container.appendChild(this.css3DRenderer.domElement);
+    }
+  }
+
+  /**
+   * 内部：根据当前 customDataMap 为指定对象创建/更新 3D 标签
+   * @param {string} uuid
+   */
+  updateCustomDataLabel(uuid) {
+    if (!uuid) return;
+    // 仅对当前选中的对象显示标签
+    if (this.activeCustomDataUuid && uuid !== this.activeCustomDataUuid) {
+      // 如果不是当前活动对象，则移除其标签
+      const oldLabel = this.customDataLabelMap[uuid];
+      if (oldLabel) {
+        this.scene.remove(oldLabel);
+        if (oldLabel.element && oldLabel.element.parentNode) {
+          oldLabel.element.parentNode.removeChild(oldLabel.element);
+        }
+        delete this.customDataLabelMap[uuid];
+      }
+      return;
+    }
+    const list = this.customDataMap[uuid] || [];
+
+    // 如果没有数据且已有标签，则移除
+    if (!list.length) {
+      const oldLabel = this.customDataLabelMap[uuid];
+      if (oldLabel) {
+        this.scene.remove(oldLabel);
+        if (oldLabel.element && oldLabel.element.parentNode) {
+          oldLabel.element.parentNode.removeChild(oldLabel.element);
+        }
+        delete this.customDataLabelMap[uuid];
+      }
+      return;
+    }
+
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (!obj) return;
+
+    this.ensureCss3DRendererMountedForCustomData();
+
+    // 计算对象中心位置
+    const box = new THREE.Box3().setFromObject(obj);
+    const center = box.getCenter(new THREE.Vector3());
+
+    // 生成显示文本：一行一个“名称: 值 单位”
+    const lines = list.map(item => {
+      const name = item.name || "参数";
+      const value = item.value != null ? item.value : "";
+      const unit = item.unit || "";
+      return `${name}: ${value}${unit ? " " + unit : ""}`;
+    });
+
+    // 复用或创建 DOM
+    let labelObject = this.customDataLabelMap[uuid];
+    let element;
+    if (labelObject) {
+      element = labelObject.element;
+      element.innerHTML = "";
+    } else {
+      element = document.createElement("div");
+      element.className = "custom-data-label";
+      Object.assign(element.style, {
+        minWidth: "120px",
+        maxWidth: "220px",
+        padding: "6px 10px",
+        borderRadius: "4px",
+        background: "rgba(0, 0, 0, 0.75)",
+        color: "#e5eaf3",
+        fontSize: "11px",
+        lineHeight: "1.4",
+        boxShadow: "0 0 6px rgba(0,0,0,0.6)",
+        pointerEvents: "none",
+        backdropFilter: "blur(2px)",
+        whiteSpace: "pre-line",
+        textAlign: "left"
+      });
+    }
+
+    lines.forEach(text => {
+      const lineDom = document.createElement("div");
+      lineDom.textContent = text;
+      element.appendChild(lineDom);
+    });
+
+    if (!labelObject) {
+      labelObject = new CSS3DObject(element);
+      labelObject.element = element;
+      this.customDataLabelMap[uuid] = labelObject;
+      this.scene.add(labelObject);
+    }
+
+    labelObject.position.copy(center.clone().add(new THREE.Vector3(0, box.getSize(new THREE.Vector3()).y * 0.6 || 0.5, 0)));
+    labelObject.scale.set(0.01, 0.01, 0.01);
+  }
+
+  /**
+   * 由外部（如材质点击逻辑）调用，当选中 mesh 变化时更新可见的自定义数据标签
+   * @param {string|null} uuid 选中的对象 uuid；null/空则隐藏所有自定义数据标签
+   */
+  onSelectedMeshChanged(uuid) {
+    this.activeCustomDataUuid = uuid || null;
+    // 清理所有已有标签
+    Object.keys(this.customDataLabelMap).forEach(key => {
+      const label = this.customDataLabelMap[key];
+      if (label) {
+        this.scene.remove(label);
+        if (label.element && label.element.parentNode) {
+          label.element.parentNode.removeChild(label.element);
+        }
+      }
+      delete this.customDataLabelMap[key];
+    });
+
+    // 若当前有选中对象且存在自定义数据，则为其重新创建标签
+    if (this.activeCustomDataUuid && this.customDataMap[this.activeCustomDataUuid]?.length) {
+      this.updateCustomDataLabel(this.activeCustomDataUuid);
+    }
+  }
 
   /**
    * 获取指定对象的自定义数据列表
@@ -203,6 +335,8 @@ class renderModel {
       if (!obj.userData) obj.userData = {};
       obj.userData.customData = this.customDataMap[uuid];
     }
+    // 创建/更新可视化标签
+    this.updateCustomDataLabel(uuid);
     return item;
   }
 
@@ -219,6 +353,7 @@ class renderModel {
       if (!obj.userData) obj.userData = {};
       obj.userData.customData = this.customDataMap[uuid];
     }
+    this.updateCustomDataLabel(uuid);
   }
 
   /**
@@ -239,6 +374,7 @@ class renderModel {
       if (!obj.userData) obj.userData = {};
       obj.userData.customData = this.customDataMap[uuid];
     }
+    this.updateCustomDataLabel(uuid);
   }
 
   init() {
@@ -318,8 +454,8 @@ class renderModel {
       }
       TWEEN.update();  // ✅ 这一行很重要，驱动所有 TWEEN 动画
       this.shaderModules.updateAllShaderTime();
-      // 3d标签渲染器
-      if (this.dragTagList.length) {
+      // 3d标签渲染器（包含：拖拽标签 + 自定义数据标签）
+      if (this.dragTagList.length || Object.keys(this.customDataLabelMap || {}).length) {
         this.css3DRenderer.render(this.scene, this.camera);
         this.css3dControls.update();
       }
