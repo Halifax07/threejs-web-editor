@@ -392,7 +392,7 @@ class renderModel {
   // 创建控制器
   initControls() {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enablePan = false;
+    this.controls.enablePan = true;
     this.controls.enableDamping = true;
     this.controls.target.set(0, 0, 0);
     this.controls.update();
