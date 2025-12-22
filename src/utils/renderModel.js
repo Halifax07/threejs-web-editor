@@ -783,8 +783,23 @@ class renderModel {
   }
 
 // 新增：把场景中选中的子对象从原父体中拆解，成为独立小模型（添加到 manyModelGroup）
-  // 增强：支持拆解后“弹出”动画（world 坐标位移 + 轻微缩放），可通过第二个参数控制行为
-  extractSubModel(uuid, options = { popOut: true, distanceFactor: 1.2, duration: 600 }) {
+  // 增强：支持拆解后“弹出”且带弧线的优雅动画（world 坐标位移 + 轻微缩放 + 轻微旋转）
+  // options:
+  //  - popOut: 是否播放弹出动画
+  //  - distanceFactor: 位移距离系数
+  //  - duration: 动画时长
+  //  - arcHeightFactor: 轨迹弧度高度系数（相对位移距离）
+  //  - rotationAngle: 最大旋转角度（弧度）
+  extractSubModel(
+    uuid,
+    options = {
+      popOut: true,
+      distanceFactor: 1.2,
+      duration: 800,
+      arcHeightFactor: 0.25,
+      rotationAngle: Math.PI / 18 // 10°
+    }
+  ) {
     const obj = this.scene.getObjectByProperty("uuid", uuid);
     if (!obj) return null;
 
@@ -835,20 +850,60 @@ class renderModel {
     if (options.popOut) {
       const localEnd = this.manyModelGroup.worldToLocal(endWorldPos.clone());
       const origScale = obj.scale.clone();
+      const origRot = obj.rotation.clone();
+
+      // 为了让轨迹更优雅：在起点和终点之间做一条“抛物线”弧线
+      const distanceLocal = localEnd.clone().sub(localStart);
+      const baseDistance = distanceLocal.length();
+      const arcHeight =
+        (options.arcHeightFactor != null ? options.arcHeightFactor : 0.25) *
+        baseDistance;
+      // 以 world 的竖直方向为主，提高空间感
+      const worldUp = new THREE.Vector3(0, 1, 0);
+      const upInLocal = this.manyModelGroup.worldToLocal(
+        worldUp.clone().add(this.manyModelGroup.position.clone())
+      ).sub(this.manyModelGroup.position);
+      upInLocal.normalize();
+      const midPoint = localStart
+        .clone()
+        .addScaledVector(distanceLocal, 0.5)
+        .addScaledVector(upInLocal, arcHeight);
+
+      const duration = options.duration || 800;
       const tweenObj = { t: 0 };
       new TWEEN.Tween(tweenObj)
-        .to({ t: 1 }, options.duration || 600)
-        .easing(TWEEN.Easing.Cubic.Out)
+        .to({ t: 1 }, duration)
+        .easing(TWEEN.Easing.Cubic.InOut)
         .onUpdate(() => {
-          // 插值位置（在父级局部坐标系中插值）
-          obj.position.lerpVectors(localStart, localEnd, tweenObj.t);
-          // 轻微缩放以增强“弹出感”，在中点略微放大然后回到原始尺度
-          const scaleFactor = 1 + 0.08 * Math.sin(Math.PI * tweenObj.t);
+          // t 分三段：起步（0~0.15）略带预拉伸，中段（0.15~0.85）沿弧线平滑移动，收尾（0.85~1）轻微回弹
+          const t = tweenObj.t;
+
+          // 位置：使用二次贝塞尔曲线做弧线轨迹
+          const u = t;
+          const oneMinusU = 1 - u;
+          const bezierPos = new THREE.Vector3()
+            .addScaledVector(localStart, oneMinusU * oneMinusU)
+            .addScaledVector(midPoint, 2 * oneMinusU * u)
+            .addScaledVector(localEnd, u * u);
+          obj.position.copy(bezierPos);
+
+          // 轻微缩放以增强“弹出感”：前半程略大、后半程回到原始尺度
+          const scaleFactor = 1 + 0.1 * Math.sin(Math.PI * t);
           obj.scale.set(origScale.x * scaleFactor, origScale.y * scaleFactor, origScale.z * scaleFactor);
+
+          // 轻微旋转：随着 t 逐渐旋转到一个小角度，然后在收尾前回到原始姿态
+          const maxAngle = options.rotationAngle != null ? options.rotationAngle : Math.PI / 18;
+          const swing = Math.sin(Math.PI * t) * maxAngle; // 中段最大，首尾为 0
+          obj.rotation.set(
+            origRot.x + swing * 0.4,
+            origRot.y + swing,
+            origRot.z + swing * 0.2
+          );
         })
         .onComplete(() => {
           obj.position.copy(localEnd);
           obj.scale.copy(origScale);
+          obj.rotation.copy(origRot);
         })
         .start();
     }
