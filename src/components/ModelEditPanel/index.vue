@@ -46,6 +46,10 @@
         <div v-show="activeTab == 'EditTags'">
           <edit-tags ref="tags"></edit-tags>
         </div>
+        <!-- 自定义数据标注 -->
+        <div v-show="activeTab == 'EditCustomData'">
+          <edit-custom-data ref="customData"></edit-custom-data>
+        </div>
         <!-- 多模型添加 -->
         <div v-show="activeTab == 'EditMoreModel'">
           <edit-more-model ref="more"></edit-more-model>
@@ -73,6 +77,7 @@ import EditLaterStage from "./EditLaterStage.vue";
 import EditGeometry from "./EditGeometry.vue";
 import EditMoreModel from "./EditMoreModel.vue";
 import EditTags from "./EditTags.vue";
+import EditCustomData from "./EditCustomData.vue";
 import EditShader from "./EditShader.vue";
 import EditViewPoint from "./EditViewPoint.vue";
 const { $bus } = getCurrentInstance().proxy;
@@ -119,6 +124,11 @@ const panelTabs = [
     icon: "CollectionTag"
   },
   {
+    name: "自定义数据",
+    key: "EditCustomData",
+    icon: "Document"
+  },
+  {
     name: "多模型配置",
     key: "EditMoreModel",
     icon: "Money"
@@ -144,6 +154,7 @@ const light = ref(null);
 const stage = ref(null);
 const geometry = ref(null);
 const tags = ref(null);
+const customData = ref(null);
 const more = ref(null);
 const shader = ref(null);
 const viewpoint = ref(null);

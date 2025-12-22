@@ -139,6 +139,8 @@ class renderModel {
     this.dragTag = {};
     //当前标签列表
     this.dragTagList = [];
+    // 自定义数据标注（按对象 uuid 存储），结构：{ [uuid]: [{ id, name, value, unit }] }
+    this.customDataMap = {};
     // 当前拖拽模型信息
     this.activeDragManyModel = {};
     // 背景模块实例
@@ -157,6 +159,86 @@ class renderModel {
     this.dragIntersection = new THREE.Vector3();
     // 当前拖拽目标（可能是主模型或 manyModelGroup 的子模型）
     this.dragTarget = null;
+  }
+
+  /**
+   * ======================
+   * 自定义数据标注相关方法
+   * ======================
+   */
+
+  /**
+   * 获取指定对象的自定义数据列表
+   * @param {string} uuid three 对象 uuid
+   * @returns {Array<{id:string,name:string,value:string,unit:string}>}
+   */
+  getCustomDataForObject(uuid) {
+    if (!uuid) return [];
+    return this.customDataMap[uuid] ? [...this.customDataMap[uuid]] : [];
+  }
+
+  /**
+   * 为指定对象新增一条自定义数据
+   * @param {string} uuid three 对象 uuid
+   * @param {{name?:string,value?:string,unit?:string}} payload
+   * @returns {{id:string,name:string,value:string,unit:string}|null}
+   */
+  addCustomDataForObject(uuid, payload = {}) {
+    if (!uuid) return null;
+    if (!this.customDataMap[uuid]) {
+      this.customDataMap[uuid] = [];
+    }
+    const id = `${uuid}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const item = {
+      id,
+      name: payload.name || "",
+      value: payload.value || "",
+      unit: payload.unit || ""
+    };
+    this.customDataMap[uuid].push(item);
+
+    // 同步写入 three 对象 userData，便于后续导出/运行时使用
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      obj.userData.customData = this.customDataMap[uuid];
+    }
+    return item;
+  }
+
+  /**
+   * 删除指定对象的一条自定义数据
+   * @param {string} uuid three 对象 uuid
+   * @param {string} id 数据项 id
+   */
+  removeCustomDataForObject(uuid, id) {
+    if (!uuid || !this.customDataMap[uuid]) return;
+    this.customDataMap[uuid] = this.customDataMap[uuid].filter(item => item.id !== id);
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      obj.userData.customData = this.customDataMap[uuid];
+    }
+  }
+
+  /**
+   * 批量更新指定对象的自定义数据列表
+   * @param {string} uuid three 对象 uuid
+   * @param {Array<{id:string,name:string,value:string,unit:string}>} list
+   */
+  updateCustomDataForObject(uuid, list = []) {
+    if (!uuid) return;
+    this.customDataMap[uuid] = (list || []).map(item => ({
+      id: item.id || `${uuid}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      name: item.name || "",
+      value: item.value || "",
+      unit: item.unit || ""
+    }));
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      obj.userData.customData = this.customDataMap[uuid];
+    }
   }
 
   init() {
