@@ -454,6 +454,10 @@ export default class MaterialModules {
         });
 
         store.selectMeshAction(toRaw(intersectedObject));
+        // 通知渲染器当前选中对象变化，用于只在选中子模型时显示自定义数据标签
+        if (store.modelApi && typeof store.modelApi.onSelectedMeshChanged === "function") {
+          store.modelApi.onSelectedMeshChanged(intersectedObject.uuid);
+        }
 
         if (transformControls) {
           const boundingBox = new THREE.Box3().setFromObject(intersectedObject);
@@ -470,6 +474,10 @@ export default class MaterialModules {
       } else if (!transformControls) {
         outlinePass.selectedObjects = [];
         store.selectMeshAction({});
+        // 清除选中时，也隐藏所有自定义数据标签
+        if (store.modelApi && typeof store.modelApi.onSelectedMeshChanged === "function") {
+          store.modelApi.onSelectedMeshChanged(null);
+        }
       }
     } catch (error) {
       console.error("处理点击事件失败:", error);
