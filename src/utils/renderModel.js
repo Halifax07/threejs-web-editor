@@ -14,7 +14,7 @@ import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { CSS3DRenderer } from "three/addons/renderers/CSS3DRenderer.js";
+import { CSS3DRenderer, CSS3DObject } from "three/addons/renderers/CSS3DRenderer.js";
 import { USDZExporter } from "three/addons/exporters/USDZExporter.js";
 import { ElMessage } from "element-plus";
 import { onlyKey, getAssetsFile } from "@/utils/utilityFunction";
@@ -139,6 +139,12 @@ class renderModel {
     this.dragTag = {};
     //当前标签列表
     this.dragTagList = [];
+    // 自定义数据标注（按对象 uuid 存储），结构：{ [uuid]: [{ id, name, value, unit }] }
+    this.customDataMap = {};
+    // 自定义数据对应的 3D 文本对象（uuid -> CSS3DObject）
+    this.customDataLabelMap = {};
+    // 当前选中的用于显示自定义数据的对象 uuid（通常是子模型）
+    this.activeCustomDataUuid = null;
     // 当前拖拽模型信息
     this.activeDragManyModel = {};
     // 背景模块实例
@@ -157,6 +163,218 @@ class renderModel {
     this.dragIntersection = new THREE.Vector3();
     // 当前拖拽目标（可能是主模型或 manyModelGroup 的子模型）
     this.dragTarget = null;
+  }
+
+  /**
+   * ======================
+   * 自定义数据标注相关方法
+   * ======================
+   */
+
+  /**
+   * 确保 CSS3DRenderer 已挂载到容器（用于自定义数据标签）
+   */
+  ensureCss3DRendererMountedForCustomData() {
+    if (!this.css3DRenderer || !this.container) return;
+    if (!this.css3DRenderer.domElement.parentNode) {
+      this.container.appendChild(this.css3DRenderer.domElement);
+    }
+  }
+
+  /**
+   * 内部：根据当前 customDataMap 为指定对象创建/更新 3D 标签
+   * @param {string} uuid
+   */
+  updateCustomDataLabel(uuid) {
+    if (!uuid) return;
+    // 仅对当前选中的对象显示标签
+    if (this.activeCustomDataUuid && uuid !== this.activeCustomDataUuid) {
+      // 如果不是当前活动对象，则移除其标签
+      const oldLabel = this.customDataLabelMap[uuid];
+      if (oldLabel) {
+        this.scene.remove(oldLabel);
+        if (oldLabel.element && oldLabel.element.parentNode) {
+          oldLabel.element.parentNode.removeChild(oldLabel.element);
+        }
+        delete this.customDataLabelMap[uuid];
+      }
+      return;
+    }
+    const list = this.customDataMap[uuid] || [];
+
+    // 如果没有数据且已有标签，则移除
+    if (!list.length) {
+      const oldLabel = this.customDataLabelMap[uuid];
+      if (oldLabel) {
+        this.scene.remove(oldLabel);
+        if (oldLabel.element && oldLabel.element.parentNode) {
+          oldLabel.element.parentNode.removeChild(oldLabel.element);
+        }
+        delete this.customDataLabelMap[uuid];
+      }
+      return;
+    }
+
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (!obj) return;
+
+    this.ensureCss3DRendererMountedForCustomData();
+
+    // 计算对象中心位置
+    const box = new THREE.Box3().setFromObject(obj);
+    const center = box.getCenter(new THREE.Vector3());
+
+    // 生成显示文本：一行一个“名称: 值 单位”
+    const lines = list.map(item => {
+      const name = item.name || "参数";
+      const value = item.value != null ? item.value : "";
+      const unit = item.unit || "";
+      return `${name}: ${value}${unit ? " " + unit : ""}`;
+    });
+
+    // 复用或创建 DOM
+    let labelObject = this.customDataLabelMap[uuid];
+    let element;
+    if (labelObject) {
+      element = labelObject.element;
+      element.innerHTML = "";
+    } else {
+      element = document.createElement("div");
+      element.className = "custom-data-label";
+      Object.assign(element.style, {
+        minWidth: "120px",
+        maxWidth: "220px",
+        padding: "6px 10px",
+        borderRadius: "4px",
+        background: "rgba(0, 0, 0, 0.75)",
+        color: "#e5eaf3",
+        fontSize: "11px",
+        lineHeight: "1.4",
+        boxShadow: "0 0 6px rgba(0,0,0,0.6)",
+        pointerEvents: "none",
+        backdropFilter: "blur(2px)",
+        whiteSpace: "pre-line",
+        textAlign: "left"
+      });
+    }
+
+    lines.forEach(text => {
+      const lineDom = document.createElement("div");
+      lineDom.textContent = text;
+      element.appendChild(lineDom);
+    });
+
+    if (!labelObject) {
+      labelObject = new CSS3DObject(element);
+      labelObject.element = element;
+      this.customDataLabelMap[uuid] = labelObject;
+      this.scene.add(labelObject);
+    }
+
+    labelObject.position.copy(center.clone().add(new THREE.Vector3(0, box.getSize(new THREE.Vector3()).y * 0.6 || 0.5, 0)));
+    labelObject.scale.set(0.01, 0.01, 0.01);
+  }
+
+  /**
+   * 由外部（如材质点击逻辑）调用，当选中 mesh 变化时更新可见的自定义数据标签
+   * @param {string|null} uuid 选中的对象 uuid；null/空则隐藏所有自定义数据标签
+   */
+  onSelectedMeshChanged(uuid) {
+    this.activeCustomDataUuid = uuid || null;
+    // 清理所有已有标签
+    Object.keys(this.customDataLabelMap).forEach(key => {
+      const label = this.customDataLabelMap[key];
+      if (label) {
+        this.scene.remove(label);
+        if (label.element && label.element.parentNode) {
+          label.element.parentNode.removeChild(label.element);
+        }
+      }
+      delete this.customDataLabelMap[key];
+    });
+
+    // 若当前有选中对象且存在自定义数据，则为其重新创建标签
+    if (this.activeCustomDataUuid && this.customDataMap[this.activeCustomDataUuid]?.length) {
+      this.updateCustomDataLabel(this.activeCustomDataUuid);
+    }
+  }
+
+  /**
+   * 获取指定对象的自定义数据列表
+   * @param {string} uuid three 对象 uuid
+   * @returns {Array<{id:string,name:string,value:string,unit:string}>}
+   */
+  getCustomDataForObject(uuid) {
+    if (!uuid) return [];
+    return this.customDataMap[uuid] ? [...this.customDataMap[uuid]] : [];
+  }
+
+  /**
+   * 为指定对象新增一条自定义数据
+   * @param {string} uuid three 对象 uuid
+   * @param {{name?:string,value?:string,unit?:string}} payload
+   * @returns {{id:string,name:string,value:string,unit:string}|null}
+   */
+  addCustomDataForObject(uuid, payload = {}) {
+    if (!uuid) return null;
+    if (!this.customDataMap[uuid]) {
+      this.customDataMap[uuid] = [];
+    }
+    const id = `${uuid}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const item = {
+      id,
+      name: payload.name || "",
+      value: payload.value || "",
+      unit: payload.unit || ""
+    };
+    this.customDataMap[uuid].push(item);
+
+    // 同步写入 three 对象 userData，便于后续导出/运行时使用
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      obj.userData.customData = this.customDataMap[uuid];
+    }
+    // 创建/更新可视化标签
+    this.updateCustomDataLabel(uuid);
+    return item;
+  }
+
+  /**
+   * 删除指定对象的一条自定义数据
+   * @param {string} uuid three 对象 uuid
+   * @param {string} id 数据项 id
+   */
+  removeCustomDataForObject(uuid, id) {
+    if (!uuid || !this.customDataMap[uuid]) return;
+    this.customDataMap[uuid] = this.customDataMap[uuid].filter(item => item.id !== id);
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      obj.userData.customData = this.customDataMap[uuid];
+    }
+    this.updateCustomDataLabel(uuid);
+  }
+
+  /**
+   * 批量更新指定对象的自定义数据列表
+   * @param {string} uuid three 对象 uuid
+   * @param {Array<{id:string,name:string,value:string,unit:string}>} list
+   */
+  updateCustomDataForObject(uuid, list = []) {
+    if (!uuid) return;
+    this.customDataMap[uuid] = (list || []).map(item => ({
+      id: item.id || `${uuid}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      name: item.name || "",
+      value: item.value || "",
+      unit: item.unit || ""
+    }));
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      obj.userData.customData = this.customDataMap[uuid];
+    }
+    this.updateCustomDataLabel(uuid);
   }
 
   init() {
@@ -236,8 +454,8 @@ class renderModel {
       }
       TWEEN.update();  // ✅ 这一行很重要，驱动所有 TWEEN 动画
       this.shaderModules.updateAllShaderTime();
-      // 3d标签渲染器
-      if (this.dragTagList.length) {
+      // 3d标签渲染器（包含：拖拽标签 + 自定义数据标签）
+      if (this.dragTagList.length || Object.keys(this.customDataLabelMap || {}).length) {
         this.css3DRenderer.render(this.scene, this.camera);
         this.css3dControls.update();
       }
@@ -392,7 +610,7 @@ class renderModel {
   // 创建控制器
   initControls() {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enablePan = false;
+    this.controls.enablePan = true;
     this.controls.enableDamping = true;
     this.controls.target.set(0, 0, 0);
     this.controls.update();
@@ -783,8 +1001,23 @@ class renderModel {
   }
 
 // 新增：把场景中选中的子对象从原父体中拆解，成为独立小模型（添加到 manyModelGroup）
-  // 增强：支持拆解后“弹出”动画（world 坐标位移 + 轻微缩放），可通过第二个参数控制行为
-  extractSubModel(uuid, options = { popOut: true, distanceFactor: 1.2, duration: 600 }) {
+  // 增强：支持拆解后“弹出”且带弧线的优雅动画（world 坐标位移 + 轻微缩放 + 轻微旋转）
+  // options:
+  //  - popOut: 是否播放弹出动画
+  //  - distanceFactor: 位移距离系数
+  //  - duration: 动画时长
+  //  - arcHeightFactor: 轨迹弧度高度系数（相对位移距离）
+  //  - rotationAngle: 最大旋转角度（弧度）
+  extractSubModel(
+    uuid,
+    options = {
+      popOut: true,
+      distanceFactor: 1.2,
+      duration: 800,
+      arcHeightFactor: 0.25,
+      rotationAngle: Math.PI / 18 // 10°
+    }
+  ) {
     const obj = this.scene.getObjectByProperty("uuid", uuid);
     if (!obj) return null;
 
@@ -835,20 +1068,60 @@ class renderModel {
     if (options.popOut) {
       const localEnd = this.manyModelGroup.worldToLocal(endWorldPos.clone());
       const origScale = obj.scale.clone();
+      const origRot = obj.rotation.clone();
+
+      // 为了让轨迹更优雅：在起点和终点之间做一条“抛物线”弧线
+      const distanceLocal = localEnd.clone().sub(localStart);
+      const baseDistance = distanceLocal.length();
+      const arcHeight =
+        (options.arcHeightFactor != null ? options.arcHeightFactor : 0.25) *
+        baseDistance;
+      // 以 world 的竖直方向为主，提高空间感
+      const worldUp = new THREE.Vector3(0, 1, 0);
+      const upInLocal = this.manyModelGroup.worldToLocal(
+        worldUp.clone().add(this.manyModelGroup.position.clone())
+      ).sub(this.manyModelGroup.position);
+      upInLocal.normalize();
+      const midPoint = localStart
+        .clone()
+        .addScaledVector(distanceLocal, 0.5)
+        .addScaledVector(upInLocal, arcHeight);
+
+      const duration = options.duration || 800;
       const tweenObj = { t: 0 };
       new TWEEN.Tween(tweenObj)
-        .to({ t: 1 }, options.duration || 600)
-        .easing(TWEEN.Easing.Cubic.Out)
+        .to({ t: 1 }, duration)
+        .easing(TWEEN.Easing.Cubic.InOut)
         .onUpdate(() => {
-          // 插值位置（在父级局部坐标系中插值）
-          obj.position.lerpVectors(localStart, localEnd, tweenObj.t);
-          // 轻微缩放以增强“弹出感”，在中点略微放大然后回到原始尺度
-          const scaleFactor = 1 + 0.08 * Math.sin(Math.PI * tweenObj.t);
+          // t 分三段：起步（0~0.15）略带预拉伸，中段（0.15~0.85）沿弧线平滑移动，收尾（0.85~1）轻微回弹
+          const t = tweenObj.t;
+
+          // 位置：使用二次贝塞尔曲线做弧线轨迹
+          const u = t;
+          const oneMinusU = 1 - u;
+          const bezierPos = new THREE.Vector3()
+            .addScaledVector(localStart, oneMinusU * oneMinusU)
+            .addScaledVector(midPoint, 2 * oneMinusU * u)
+            .addScaledVector(localEnd, u * u);
+          obj.position.copy(bezierPos);
+
+          // 轻微缩放以增强“弹出感”：前半程略大、后半程回到原始尺度
+          const scaleFactor = 1 + 0.1 * Math.sin(Math.PI * t);
           obj.scale.set(origScale.x * scaleFactor, origScale.y * scaleFactor, origScale.z * scaleFactor);
+
+          // 轻微旋转：随着 t 逐渐旋转到一个小角度，然后在收尾前回到原始姿态
+          const maxAngle = options.rotationAngle != null ? options.rotationAngle : Math.PI / 18;
+          const swing = Math.sin(Math.PI * t) * maxAngle; // 中段最大，首尾为 0
+          obj.rotation.set(
+            origRot.x + swing * 0.4,
+            origRot.y + swing,
+            origRot.z + swing * 0.2
+          );
         })
         .onComplete(() => {
           obj.position.copy(localEnd);
           obj.scale.copy(origScale);
+          obj.rotation.copy(origRot);
         })
         .start();
     }
