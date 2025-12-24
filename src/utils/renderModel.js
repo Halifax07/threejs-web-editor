@@ -143,6 +143,8 @@ class renderModel {
     this.customDataMap = {};
     // 自定义数据对应的 3D 文本对象（uuid -> CSS3DObject）
     this.customDataLabelMap = {};
+    // 自定义数据标签的显示配置（按对象 uuid 存储），结构：{ [uuid]: { fontSize, offsetX, offsetY, offsetZ, scale } }
+    this.customDataLabelConfigMap = {};
     // 当前选中的用于显示自定义数据的对象 uuid（通常是子模型）
     this.activeCustomDataUuid = null;
     // 当前拖拽模型信息
@@ -223,6 +225,15 @@ class renderModel {
     // 计算对象中心位置
     const box = new THREE.Box3().setFromObject(obj);
     const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+
+    // 获取标签显示配置（默认值）
+    const config = this.customDataLabelConfigMap[uuid] || {};
+    const fontSize = config.fontSize != null ? config.fontSize : 11;
+    const offsetX = config.offsetX != null ? config.offsetX : 0;
+    const offsetY = config.offsetY != null ? config.offsetY : size.y * 0.6 || 0.5;
+    const offsetZ = config.offsetZ != null ? config.offsetZ : 0;
+    const scale = config.scale != null ? config.scale : 0.01;
 
     // 生成显示文本：一行一个“名称: 值 单位”
     const lines = list.map(item => {
@@ -248,7 +259,6 @@ class renderModel {
         borderRadius: "4px",
         background: "rgba(0, 0, 0, 0.75)",
         color: "#e5eaf3",
-        fontSize: "11px",
         lineHeight: "1.4",
         boxShadow: "0 0 6px rgba(0,0,0,0.6)",
         pointerEvents: "none",
@@ -257,6 +267,9 @@ class renderModel {
         textAlign: "left"
       });
     }
+
+    // 应用字体大小
+    element.style.fontSize = `${fontSize}px`;
 
     lines.forEach(text => {
       const lineDom = document.createElement("div");
@@ -271,8 +284,9 @@ class renderModel {
       this.scene.add(labelObject);
     }
 
-    labelObject.position.copy(center.clone().add(new THREE.Vector3(0, box.getSize(new THREE.Vector3()).y * 0.6 || 0.5, 0)));
-    labelObject.scale.set(0.01, 0.01, 0.01);
+    // 应用位置偏移和缩放
+    labelObject.position.copy(center.clone().add(new THREE.Vector3(offsetX, offsetY, offsetZ)));
+    labelObject.scale.set(scale, scale, scale);
   }
 
   /**
@@ -375,6 +389,75 @@ class renderModel {
       obj.userData.customData = this.customDataMap[uuid];
     }
     this.updateCustomDataLabel(uuid);
+  }
+
+  /**
+   * 获取指定对象的标签显示配置
+   * @param {string} uuid three 对象 uuid
+   * @returns {{fontSize:number,offsetX:number,offsetY:number,offsetZ:number,scale:number}}
+   */
+  getCustomDataLabelConfig(uuid) {
+    if (!uuid) return null;
+    const config = this.customDataLabelConfigMap[uuid];
+    if (config) {
+      return { ...config };
+    }
+    // 返回默认配置
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (!obj) return null;
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    return {
+      fontSize: 11,
+      offsetX: 0,
+      offsetY: size.y * 0.6 || 0.5,
+      offsetZ: 0,
+      scale: 0.01
+    };
+  }
+
+  /**
+   * 更新指定对象的标签显示配置
+   * @param {string} uuid three 对象 uuid
+   * @param {{fontSize?:number,offsetX?:number,offsetY?:number,offsetZ?:number,scale?:number}} config
+   */
+  updateCustomDataLabelConfig(uuid, config = {}) {
+    if (!uuid) return;
+    if (!this.customDataLabelConfigMap[uuid]) {
+      this.customDataLabelConfigMap[uuid] = {};
+    }
+    // 合并配置
+    Object.assign(this.customDataLabelConfigMap[uuid], config);
+    // 同步到 three 对象 userData
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      if (!obj.userData.customDataLabelConfig) obj.userData.customDataLabelConfig = {};
+      Object.assign(obj.userData.customDataLabelConfig, this.customDataLabelConfigMap[uuid]);
+    }
+    // 更新标签显示
+    this.updateCustomDataLabel(uuid);
+  }
+
+  /**
+   * 从 three 对象的 userData 恢复自定义数据和标签配置（用于加载已保存的场景）
+   * @param {THREE.Object3D} obj three 对象
+   */
+  restoreCustomDataFromUserData(obj) {
+    if (!obj || !obj.uuid) return;
+    // 恢复自定义数据
+    if (obj.userData?.customData && Array.isArray(obj.userData.customData)) {
+      this.customDataMap[obj.uuid] = obj.userData.customData.map(item => ({
+        id: item.id || `${obj.uuid}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        name: item.name || "",
+        value: item.value != null ? String(item.value) : "",
+        unit: item.unit || ""
+      }));
+    }
+    // 恢复标签显示配置
+    if (obj.userData?.customDataLabelConfig) {
+      this.customDataLabelConfigMap[obj.uuid] = { ...obj.userData.customDataLabelConfig };
+    }
   }
 
   init() {

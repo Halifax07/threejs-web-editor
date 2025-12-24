@@ -64,12 +64,99 @@
       </el-table>
       <el-empty v-else description="请先在场景中选中要标注数据的模型" :image-size="100" />
     </div>
+
+    <!-- 标签显示配置 -->
+    <div class="options" v-if="currentTargetUuid">
+      <div class="header sub-header">
+        <span> 标签显示设置 </span>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>字体大小</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.fontSize"
+            :min="8"
+            :max="24"
+            :step="1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>位置偏移 X</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.offsetX"
+            :min="-5"
+            :max="5"
+            :step="0.1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>位置偏移 Y</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.offsetY"
+            :min="-5"
+            :max="5"
+            :step="0.1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>位置偏移 Z</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.offsetZ"
+            :min="-5"
+            :max="5"
+            :step="0.1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>标签缩放</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.scale"
+            :min="0.005"
+            :max="0.05"
+            :step="0.001"
+            show-input
+            :format-tooltip="val => val.toFixed(3)"
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <el-button type="default" size="small" @click="onResetLabelConfig">重置为默认值</el-button>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, reactive, watch } from "vue";
 import { useMeshEditStore } from "@/store/meshEditStore";
+import * as THREE from "three";
 
 const store = useMeshEditStore();
 
@@ -83,6 +170,15 @@ const state = reactive({
 });
 
 const paramList = computed(() => state.paramList);
+
+// 标签显示配置
+const labelConfig = reactive({
+  fontSize: 11,
+  offsetX: 0,
+  offsetY: 0.5,
+  offsetZ: 0,
+  scale: 0.01
+});
 
 // 从 modelApi 读取当前对象的自定义数据
 const refreshParamsFromApi = () => {
@@ -104,11 +200,36 @@ const refreshParamsFromApi = () => {
   }));
 };
 
-// 监听选中模型变化，自动刷新参数列表
+// 从 modelApi 读取当前对象的标签显示配置
+const refreshLabelConfigFromApi = () => {
+  if (!store.modelApi || !currentTargetUuid.value) {
+    // 重置为默认值
+    labelConfig.fontSize = 11;
+    labelConfig.offsetX = 0;
+    labelConfig.offsetY = 0.5;
+    labelConfig.offsetZ = 0;
+    labelConfig.scale = 0.01;
+    return;
+  }
+  if (typeof store.modelApi.getCustomDataLabelConfig !== "function") {
+    return;
+  }
+  const config = store.modelApi.getCustomDataLabelConfig(currentTargetUuid.value);
+  if (config) {
+    labelConfig.fontSize = config.fontSize || 11;
+    labelConfig.offsetX = config.offsetX != null ? config.offsetX : 0;
+    labelConfig.offsetY = config.offsetY != null ? config.offsetY : 0.5;
+    labelConfig.offsetZ = config.offsetZ != null ? config.offsetZ : 0;
+    labelConfig.scale = config.scale != null ? config.scale : 0.01;
+  }
+};
+
+// 监听选中模型变化，自动刷新参数列表和标签配置
 watch(
   () => currentTargetUuid.value,
   () => {
     refreshParamsFromApi();
+    refreshLabelConfigFromApi();
   },
   { immediate: true }
 );
@@ -146,6 +267,36 @@ const onDeleteParam = index => {
 const onChange = () => {
   if (!store.modelApi || typeof store.modelApi.updateCustomDataForObject !== "function") return;
   store.modelApi.updateCustomDataForObject(currentTargetUuid.value, state.paramList);
+};
+
+// 标签配置变更
+const onLabelConfigChange = () => {
+  if (!store.modelApi || typeof store.modelApi.updateCustomDataLabelConfig !== "function") return;
+  if (!currentTargetUuid.value) return;
+  store.modelApi.updateCustomDataLabelConfig(currentTargetUuid.value, {
+    fontSize: labelConfig.fontSize,
+    offsetX: labelConfig.offsetX,
+    offsetY: labelConfig.offsetY,
+    offsetZ: labelConfig.offsetZ,
+    scale: labelConfig.scale
+  });
+};
+
+// 重置标签配置为默认值
+const onResetLabelConfig = () => {
+  if (!store.modelApi || !currentTargetUuid.value) return;
+  // 获取对象的默认配置（基于包围盒）
+  const obj = store.modelApi.scene?.getObjectByProperty("uuid", currentTargetUuid.value);
+  if (obj) {
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    labelConfig.fontSize = 11;
+    labelConfig.offsetX = 0;
+    labelConfig.offsetY = size.y * 0.6 || 0.5;
+    labelConfig.offsetZ = 0;
+    labelConfig.scale = 0.01;
+    onLabelConfigChange();
+  }
 };
 </script>
 
