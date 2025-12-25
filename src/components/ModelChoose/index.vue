@@ -193,8 +193,8 @@ const onUpload = async file => {
   try {
     // 导入外部模型时不清空场景，而是追加
     const { load, filePath } = await store.modelApi.onSwitchModel(model, false);
-    // TODO: 加载成功之后手动释放 否则会造成内存浪费
-    URL.revokeObjectURL(filePath);
+    // 注意：不能立即释放 Blob URL，否则预览功能无法再次读取该文件
+    // URL.revokeObjectURL(filePath);
     if (load) {
       $bus.emit(UPDATE_MODEL);
       $bus.emit(PAGE_LOADING, false);

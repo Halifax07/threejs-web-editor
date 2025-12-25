@@ -333,9 +333,20 @@ const onInitialize = () => {
 };
 
 const getMeshConfig = () => {
+  // 深拷贝并清理可能导致循环引用的数据
+  const meshList = store.modelApi.materialModules.onGetEditMeshList().map(item => {
+    const newItem = { ...item };
+    if (newItem.userData) {
+      // 移除 userData 中的 Three.js 对象引用
+      const { originalMaterial, ...safeUserData } = newItem.userData;
+      newItem.userData = safeUserData;
+    }
+    return newItem;
+  });
+
   return {
     materialType: activeMeshType.value,
-    meshList: store.modelApi.materialModules.onGetEditMeshList(),
+    meshList,
     event: event.value?.config
   };
 };

@@ -47,6 +47,8 @@ class renderModel {
     this.geometryGroup = new THREE.Group();
     // 多模型数组
     this.manyModelGroup = new THREE.Group();
+    // 已加载模型列表（用于预览和导出）
+    this.loadedModels = [];
     // 加载进度监听
     this.loadingManager = new THREE.LoadingManager();
     //文件加载器类型
@@ -389,7 +391,7 @@ class renderModel {
       // 创建灯光
       this.createLight();
       this.addEvenListMouseListener();
-      const load = await this.loadModel({ filePath: "threeFile/glb/glb-7.glb", fileType: "glb" });
+      const load = await this.loadModel({ filePath: "/threeFile/glb/glb-7.glb", fileType: "glb" });
       // 创建效果合成器
       this.createEffectComposer();
       //场景渲染
@@ -438,6 +440,7 @@ class renderModel {
     this.css3DRenderer.domElement.style.position = "absolute";
     this.css3DRenderer.domElement.style.pointerEvents = "none";
     this.css3DRenderer.domElement.style.top = 0;
+    this.container.appendChild(this.css3DRenderer.domElement);
   }
   // 更新场景
   sceneAnimation() {
@@ -454,8 +457,8 @@ class renderModel {
       }
       TWEEN.update();  // ✅ 这一行很重要，驱动所有 TWEEN 动画
       this.shaderModules.updateAllShaderTime();
-      // 3d标签渲染器（包含：拖拽标签 + 自定义数据标签）
-      if (this.dragTagList.length || Object.keys(this.customDataLabelMap || {}).length) {
+      // 3d标签渲染器（包含：拖拽标签 + 自定义数据标签 + 图表）
+      if (this.dragTagList.length || Object.keys(this.customDataLabelMap || {}).length || Object.keys(this.chartRegistry || {}).length) {
         this.css3DRenderer.render(this.scene, this.camera);
         this.css3dControls.update();
       }
@@ -495,25 +498,57 @@ class renderModel {
 
       this.raycaster.setFromCamera(this.mouse, this.camera);
 
-      // 优先检测 manyModelGroup 的子模型（若存在），否则在没有子模型时允许拖动主模型
       let intersects = [];
       let dragRoot = null;
 
-      if (this.manyModelGroup && this.manyModelGroup.children.length > 0) {
-        intersects = this.raycaster.intersectObjects(this.manyModelGroup.children, true);
-        if (intersects.length > 0) {
-          // 找到被选中的子对象，向上找到直接被 manyModelGroup 持有的根对象
-          let picked = intersects[0].object;
-          let root = picked;
-          while (root.parent && root.parent !== this.manyModelGroup) {
-            root = root.parent;
+      // 收集所有可拖拽的根对象
+      // 修改为：只要是在场景中的模型（manyModelGroup子项、geometryGroup子项、主model），都纳入检测范围
+      let candidates = [];
+      
+      const addCandidate = (obj) => {
+          if (obj) candidates.push(toRaw(obj));
+      };
+
+      // 1. 多模型组的子模型
+      if (this.manyModelGroup) {
+          toRaw(this.manyModelGroup).children.forEach(addCandidate);
+      }
+
+      // 2. 几何体组的子模型
+      if (this.geometryGroup) {
+          toRaw(this.geometryGroup).children.forEach(addCandidate);
+      }
+
+      // 3. 主模型 (如果它不是上述组本身，且未被包含)
+      if (this.model) {
+          const rawModel = toRaw(this.model);
+          const isGeometryGroup = this.geometryGroup && rawModel === toRaw(this.geometryGroup);
+          
+          if (!isGeometryGroup) {
+              // 如果主模型不在 candidates 中（例如它直接挂在 scene 下，或者尚未被归类到组中）
+              if (!candidates.includes(rawModel)) {
+                  candidates.push(rawModel);
+              }
           }
-          dragRoot = root;
-        }
-      } else if (this.model) {
-        // 仅当没有拆解出子模型时允许拖动主模型
-        intersects = this.raycaster.intersectObject(this.model, true);
-        if (intersects.length > 0) dragRoot = this.model;
+      }
+      
+      // 去重
+      candidates = [...new Set(candidates)];
+
+      if (candidates.length > 0) {
+          intersects = this.raycaster.intersectObjects(candidates, true);
+          if (intersects.length > 0) {
+              let picked = intersects[0].object;
+              let root = picked;
+              // 向上查找直到找到 candidates 中的对象
+              while (root) {
+                  if (candidates.includes(toRaw(root))) {
+                      dragRoot = root;
+                      break;
+                  }
+                  root = root.parent;
+              }
+          }
       }
 
       if (dragRoot) {
@@ -611,14 +646,14 @@ class renderModel {
   initControls() {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enablePan = true;
-    this.controls.enableDamping = true;
+    this.controls.enableDamping = false;
     this.controls.target.set(0, 0, 0);
     this.controls.update();
 
     //标签控制器
     this.css3dControls = new OrbitControls(this.camera, this.css3DRenderer.domElement);
     this.css3dControls.enablePan = false;
-    this.css3dControls.enableDamping = true;
+    this.css3dControls.enableDamping = false;
     this.css3dControls.target.set(0, 0, 0);
     this.css3dControls.update();
   }
@@ -629,7 +664,7 @@ class renderModel {
       let loader;
       if (["glb", "gltf"].includes(fileType)) {
         const dracoLoader = new DRACOLoader();
-        dracoLoader.setDecoderPath(`draco/`);
+        dracoLoader.setDecoderPath(`/draco/`);
         dracoLoader.setDecoderConfig({ type: "js" });
         dracoLoader.preload();
         loader = new GLTFLoader().setDRACOLoader(dracoLoader);
@@ -637,43 +672,67 @@ class renderModel {
         loader = this.fileLoaderMap[fileType];
       }
       if (clearScene) {
-        this.model?.dispose()
+        this.model?.dispose();
+        this.manyModelGroup.clear();
+        this.loadedModels = [];
       }
       loader.load(
         filePath,
         result => {
+          let newModel;
           switch (fileType) {
             case "glb":
-              this.model = result.scene;
-              if (result.animations) this.model.animations = result.animations;
+              newModel = result.scene;
+              if (result.animations) newModel.animations = result.animations;
               break;
             case "fbx":
-              this.model = result;
-              if (result.animations) this.model.animations = result.animations;
+              newModel = result;
+              if (result.animations) newModel.animations = result.animations;
               break;
             case "gltf":
-              this.model = result.scene;
-              if (result.animations) this.model.animations = result.animations;
+              newModel = result.scene;
+              if (result.animations) newModel.animations = result.animations;
               break;
             case "obj":
-              this.model = result;
-              if (result.animations) this.model.animations = result.animations;
+              newModel = result;
+              if (result.animations) newModel.animations = result.animations;
               break;
             case "stl":
               const material = new THREE.MeshStandardMaterial();
               const mesh = new THREE.Mesh(result, material);
-              this.model = mesh;
+              newModel = mesh;
               break;
             default:
               break;
           }
+
+          // 记录模型信息
+          const modelInfo = { filePath, fileType, decomposeName, object: newModel };
+
+          if (clearScene) {
+            this.model = newModel;
+            this.scene.add(this.model);
+            this.loadedModels = [modelInfo];
+            // 确保 manyModelGroup 在场景中
+            if (!this.scene.getObjectByProperty('uuid', this.manyModelGroup.uuid)) {
+                this.scene.add(this.manyModelGroup);
+            }
+          } else {
+            this.manyModelGroup.add(newModel);
+            this.model = newModel;
+            this.loadedModels.push(modelInfo);
+            // 确保 manyModelGroup 在场景中
+            if (!this.scene.getObjectByProperty('uuid', this.manyModelGroup.uuid)) {
+                this.scene.add(this.manyModelGroup);
+            }
+          }
+
           this.model.decomposeName = decomposeName;
           this.materialModules.getModelMaterialList();
           this.materialModules.setModelPositionSize();
 
           // 需要辉光的材质
           this.glowMaterialList = this.modelMaterialList.map(v => v.name);
-          this.scene.add(this.model);
           this.loadingStatus = true;
           resolve(true);
           this.getModelAnimationList(result);
@@ -966,6 +1025,23 @@ class renderModel {
     });
   }
 
+  // 获取所有已加载模型的信息
+  getLoadedModelsInfo() {
+      return (this.loadedModels || []).map(item => {
+          const { object } = item;
+          if (object) {
+              return {
+                  ...item,
+                  object: undefined, // 不导出对象本身
+                  position: object.position.toArray(),
+                  rotation: object.rotation.toArray().slice(0, 3), // 只取 x, y, z
+                  scale: object.scale.toArray()
+              };
+          }
+          return item;
+      });
+  }
+
   // 新增：返回场景中可作为视角目标的对象列表（用于 UI）
   getViewTargets() {
     const list = [];
@@ -1182,8 +1258,21 @@ class renderModel {
         onlyVisible: true, //是否只导出可见物体
         includeCustomExtensions: true
       };
+
+      // 收集所有需要导出的对象
+      const exportObjects = [];
+      if (this.model) exportObjects.push(toRaw(this.model));
+      if (this.manyModelGroup && this.manyModelGroup.children.length > 0) exportObjects.push(toRaw(this.manyModelGroup));
+      if (this.geometryGroup && this.geometryGroup.children.length > 0) exportObjects.push(toRaw(this.geometryGroup));
+      
+      // 导出灯光
+      if (this.ambientLight) exportObjects.push(toRaw(this.ambientLight));
+      if (this.directionalLight) exportObjects.push(toRaw(this.directionalLight));
+      if (this.pointLight) exportObjects.push(toRaw(this.pointLight));
+      if (this.spotLight) exportObjects.push(toRaw(this.spotLight));
+
       exporter.parse(
-        this.model,
+        exportObjects.length > 0 ? exportObjects : toRaw(this.scene),
         result => {
           if (result instanceof ArrayBuffer) {
             // 将结果保存为GLB二进制文件
@@ -1493,7 +1582,7 @@ class renderModel {
         let loader;
         if (["glb", "gltf"].includes(fileType)) {
           const dracoLoader = new DRACOLoader();
-          dracoLoader.setDecoderPath(`draco/`);
+          dracoLoader.setDecoderPath(`/draco/`);
           dracoLoader.setDecoderConfig({ type: "js" });
           dracoLoader.preload();
           loader = new GLTFLoader().setDRACOLoader(dracoLoader);
@@ -1551,6 +1640,15 @@ class renderModel {
             if (!this.scene.getObjectByProperty('uuid', this.manyModelGroup.uuid)) {
                 this.scene.add(this.manyModelGroup);
             }
+
+            // 记录到 loadedModels，确保可以被选中和拖拽
+            if (!this.loadedModels) this.loadedModels = [];
+            this.loadedModels.push({
+                filePath,
+                fileType,
+                decomposeName: name,
+                object: manyModel
+            });
 
             this.loadingStatus = true;
 

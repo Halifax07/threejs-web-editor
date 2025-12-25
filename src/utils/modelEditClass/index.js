@@ -13,6 +13,7 @@ import manyModelModules from "./manyModelModules"; // 多模型管理
 import stageFlowModules from "./stageFlowModules"; // 后期效果
 import animationModules from "./animationModules"; // 动画系统
 import tagsModules from "./tagsModules.jsx"; // 标注系统
+import chartModules from "./chartModules.js"; // 图表系统
 import eventModules from "./eventModules"; // 事件交互系统
 
 // 导出所有模块功能
@@ -26,5 +27,6 @@ export default {
   ...stageFlowModules,
   ...animationModules,
   ...tagsModules,
+  ...chartModules,
   ...eventModules
 };

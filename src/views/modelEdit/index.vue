@@ -12,14 +12,6 @@
           <el-button type="primary" icon="Film" @click="$router.push({ path: '/modelBase' })"> 模型库 </el-button>
           <el-button type="primary" icon="Document" v-if="handleConfigBtn" @click="onSaveConfig">保存数据</el-button>
           <el-button type="primary" icon="View" v-if="handleConfigBtn" @click="onPreview">效果预览</el-button>
-          <el-button 
-            :type="store.isPreviewMode ? 'success' : 'primary'" 
-            icon="Pointer" 
-            v-if="handleConfigBtn" 
-            @click="onTogglePreviewMode"
-          >
-            {{ store.isPreviewMode ? '退出交互' : '开启交互' }}
-          </el-button>
           <el-dropdown trigger="click">
             <el-button type="primary" icon="Download"> 下载/导出<el-icon class="el-icon--right"></el-icon> </el-button>
             <template #dropdown>
@@ -75,6 +67,7 @@ import { modelList } from "@/config/model";
 import PageLoading from "@/components/Loading/PageLoading.vue";
 import { MODEL_PREVIEW_CONFIG, MODEL_BASE_DATA, MODEL_DEFAULT_CONFIG, UPDATE_MODEL, PAGE_LOADING } from "@/config/constant";
 import { useMeshEditStore } from "@/store/meshEditStore";
+import { saveFile } from "@/utils/indexedDB";
 import * as THREE from "three";
 
 const store = useMeshEditStore();
@@ -167,17 +160,85 @@ const onDragDrop = async e => {
   }
 };
 // 预览
-const onPreview = () => {
-  const modelConfig = editPanel.value.getPanelConfig();
-  modelConfig.camera = store.modelApi.onGetModelCamera();
-  modelConfig.fileInfo = choosePanel.value?.activeModel;
-  //判断是否是外部模型
-  if (modelConfig.fileInfo.filePath) {
-    $local.set(MODEL_PREVIEW_CONFIG, modelConfig);
-    const { href } = router.resolve({ path: "/preview" });
-    window.open(href, "_blank");
-  } else {
-    ElMessage.warning("当前模型暂不支持“效果预览”");
+const onPreview = async () => {
+  try {
+    // 使用 JSON.stringify + replacer 处理循环引用，比手动递归更稳健
+    const getCircularReplacer = () => {
+      const seen = new WeakSet();
+      return (key, value) => {
+        if (typeof value === "object" && value !== null) {
+          if (seen.has(value)) {
+            return;
+          }
+          seen.add(value);
+        }
+        return value;
+      };
+    };
+
+    const panelConfig = editPanel.value.getPanelConfig();
+    // 先序列化再反序列化，确保得到纯净的 JSON 对象
+    const modelConfig = JSON.parse(JSON.stringify(panelConfig, getCircularReplacer()));
+    
+    modelConfig.camera = store.modelApi.onGetModelCamera();
+    modelConfig.fileInfo = choosePanel.value?.activeModel;
+
+    // 更新主模型的位置信息
+    if (modelConfig.fileInfo && store.modelApi.model) {
+        const { position, rotation, scale } = store.modelApi.model;
+        modelConfig.fileInfo.position = position.toArray();
+        modelConfig.fileInfo.rotation = rotation.toArray();
+        modelConfig.fileInfo.scale = scale.toArray();
+    }
+    
+    // 获取所有已加载模型列表
+    if (store.modelApi.getLoadedModelsInfo) {
+        modelConfig.modelList = store.modelApi.getLoadedModelsInfo();
+    }
+
+    // 处理 Blob URL，将其存入 IndexedDB 以便跨标签页访问
+    if (modelConfig.modelList && modelConfig.modelList.length > 0) {
+        for (const item of modelConfig.modelList) {
+            if (item.filePath && typeof item.filePath === 'string' && item.filePath.startsWith('blob:')) {
+                try {
+                    const response = await fetch(item.filePath);
+                    const blob = await response.blob();
+                    const fileId = `model_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                    await saveFile(fileId, blob);
+                    item.isFileStore = true;
+                    item.fileId = fileId;
+                } catch (e) {
+                    console.error("Failed to save blob for preview", e);
+                }
+            }
+        }
+    }
+
+    // 兼容处理 fileInfo
+    if (modelConfig.fileInfo && modelConfig.fileInfo.filePath && typeof modelConfig.fileInfo.filePath === 'string' && modelConfig.fileInfo.filePath.startsWith('blob:')) {
+         try {
+            const response = await fetch(modelConfig.fileInfo.filePath);
+            const blob = await response.blob();
+            const fileId = `model_main_${Date.now()}`;
+            await saveFile(fileId, blob);
+            modelConfig.fileInfo.isFileStore = true;
+            modelConfig.fileInfo.fileId = fileId;
+         } catch (e) {
+             console.error("Failed to save main model blob", e);
+         }
+    }
+
+    //判断是否是外部模型
+    if ((modelConfig.modelList && modelConfig.modelList.length > 0) || (modelConfig.fileInfo && modelConfig.fileInfo.filePath)) {
+      $local.set(MODEL_PREVIEW_CONFIG, modelConfig);
+      const { href } = router.resolve({ path: "/preview" });
+      window.open(href, "_blank");
+    } else {
+      ElMessage.warning("当前模型暂不支持“效果预览”");
+    }
+  } catch (error) {
+    console.error("预览失败:", error);
+    ElMessage.error(`预览失败: ${error.message}`);
   }
 };
 

@@ -18,6 +18,10 @@
         <div v-show="activeTab == 'EditBackground'">
           <edit-background ref="background"></edit-background>
         </div>
+        <!-- 图表 -->
+        <div v-show="activeTab == 'EditChart'">
+          <edit-chart ref="chart"></edit-chart>
+        </div>
         <!-- 材质 -->
         <div v-show="activeTab == 'EditMaterial'">
           <edit-material ref="material"></edit-material>
@@ -80,13 +84,21 @@ import EditTags from "./EditTags.vue";
 import EditCustomData from "./EditCustomData.vue";
 import EditShader from "./EditShader.vue";
 import EditViewPoint from "./EditViewPoint.vue";
+import EditChart from "./EditChart.vue";
+import { useMeshEditStore } from "@/store/meshEditStore";
 const { $bus } = getCurrentInstance().proxy;
+const store = useMeshEditStore();
 
 const panelTabs = [
   {
     name: "背景",
     key: "EditBackground",
     icon: "Picture"
+  },
+  {
+    name: "图表",
+    key: "EditChart",
+    icon: "TrendCharts"
   },
   {
     name: "材质",
@@ -173,7 +185,21 @@ const getPanelConfig = () => {
     attribute: attribute.value.getAttributeConfig(),
     light: light.value.config,
     stage: stage.value.getStageConfig(),
-    tags: tags.value.config
+    tags: tags.value.config,
+    modelList: more.value.getModelListConfig(),
+    events: (() => {
+      const events = store.modelApi.getAllMeshEventData();
+      // 补充meshName，确保预览时能通过名称匹配
+      for (const uuid in events) {
+        if (!events[uuid].meshName) {
+          const mesh = store.modelApi.scene.getObjectByProperty("uuid", uuid);
+          if (mesh) {
+            events[uuid].meshName = mesh.name;
+          }
+        }
+      }
+      return events;
+    })()
   };
 };
 defineExpose({

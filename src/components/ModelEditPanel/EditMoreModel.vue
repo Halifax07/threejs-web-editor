@@ -189,6 +189,30 @@ const onResultModelPosition = () => {
 const onSetModelScale = () => {
   store.modelApi.setManyModelScale(chooseModelUuid.value, config.scale);
 };
+
+// 获取多模型配置列表
+const getModelListConfig = () => {
+  const list = [];
+  if (store.modelApi.loadedModels) {
+    store.modelApi.loadedModels.forEach(item => {
+      if (item.object) {
+        // eslint-disable-next-line no-unused-vars
+        const { object, ...rest } = item;
+        list.push({
+          ...rest,
+          position: item.object.position.toArray(),
+          rotation: item.object.rotation.toArray(),
+          scale: item.object.scale.toArray()
+        });
+      }
+    });
+  }
+  return list;
+};
+
+defineExpose({
+  getModelListConfig
+});
 </script>
 <style scoped lang="scss">
 .icon-name {

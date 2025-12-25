@@ -123,6 +123,18 @@ function getMeshEventData(uuid) {
 }
 
 /**
+ * 获取所有模型事件数据
+ * @returns {Object} 所有事件配置 { uuid: config }
+ */
+function getAllMeshEventData() {
+  const obj = {};
+  for (const [uuid, config] of meshEventMap) {
+    obj[uuid] = config;
+  }
+  return obj;
+}
+
+/**
  * 触发模型点击事件
  * @param {Object} mesh - 被点击的模型对象
  */
@@ -374,6 +386,7 @@ function clearEventData() {
 export default {
   setMeshEventData,
   getMeshEventData,
+  getAllMeshEventData,
   triggerMeshEvent,
   clearEventData,
   saveSceneState,
