@@ -81,10 +81,15 @@ function onResetModelCamera() {
 
 /**
  * 获取相机当前位置
- * @returns {THREE.Vector3} 相机位置坐标
+ * @returns {Object} 相机位置坐标和控制器目标点
  */
 function onGetModelCamera() {
-  return this.camera.position;
+  return {
+      x: this.camera.position.x,
+      y: this.camera.position.y,
+      z: this.camera.position.z,
+      target: this.controls.target.toArray()
+  };
 }
 
 /**

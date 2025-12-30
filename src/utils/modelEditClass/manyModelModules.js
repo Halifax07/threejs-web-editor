@@ -59,6 +59,11 @@ function deleteManyModel(uuid) {
 
   this.manyModelGroup.remove(manyModel);
   this.outlinePass.selectedObjects = [];
+  
+  // 从 loadedModels 中移除
+  if (this.loadedModels) {
+      this.loadedModels = this.loadedModels.filter(item => item.object.uuid !== uuid);
+  }
 }
 
 /**

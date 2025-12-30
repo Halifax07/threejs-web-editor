@@ -8,7 +8,7 @@ import { isRef, isReactive, toRaw } from "vue";
 
 let indexedDb = window.indexedDB;
 let name = "threeEdit";
-let version = 1;
+let version = 2;
 let database = null;
 
 function createIndexedDb() {
@@ -18,6 +18,9 @@ function createIndexedDb() {
       const db = event.target.result;
       if (!db.objectStoreNames.contains("mystore")) {
         db.createObjectStore("mystore", { autoIncrement: true });
+      }
+      if (!db.objectStoreNames.contains("modelFiles")) {
+        db.createObjectStore("modelFiles", { keyPath: "id" });
       }
     };
     request.onsuccess = event => {
@@ -32,6 +35,45 @@ function createIndexedDb() {
 }
 
 createIndexedDb();
+
+export function saveFile(id, blob) {
+  return new Promise((resolve, reject) => {
+    if (!database) {
+        createIndexedDb().then(() => _save());
+    } else {
+        _save();
+    }
+
+    function _save() {
+        const transaction = database.transaction(["modelFiles"], "readwrite");
+        const objectStore = transaction.objectStore("modelFiles");
+        const request = objectStore.put({ id, blob });
+        request.onsuccess = () => resolve();
+        request.onerror = (e) => reject(e);
+    }
+  });
+}
+
+export function getFile(id) {
+  return new Promise((resolve, reject) => {
+    if (!database) {
+        createIndexedDb().then(() => _get());
+    } else {
+        _get();
+    }
+
+    function _get() {
+        const transaction = database.transaction(["modelFiles"], "readonly");
+        const objectStore = transaction.objectStore("modelFiles");
+        const request = objectStore.get(id);
+        request.onsuccess = (e) => {
+            const result = e.target.result;
+            resolve(result ? result.blob : null);
+        };
+        request.onerror = (e) => reject(e);
+    }
+  });
+}
 
 function convertToPlainData(reactiveData) {
   if (Array.isArray(reactiveData)) {

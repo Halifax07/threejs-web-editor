@@ -28,8 +28,10 @@ import { CSS3DObject, CSS3DRenderer } from "three/addons/renderers/CSS3DRenderer
 
 // 项目配置和工具函数
 import { vertexShader, fragmentShader } from "@/config/constant.js";
+import { getFile } from "@/utils/indexedDB";
 import { mapImageList } from "@/config/model";
 import { lightPosition, onlyKey, debounce, getAssetsFile } from "@/utils/utilityFunction";
+import TWEEN from "@tweenjs/tween.js";
 
 /**
  * @describe three.js 组件数据初始化方法
@@ -98,6 +100,9 @@ class renderModel {
     // CSS3D渲染
     this.css3dControls = null;
     this.css3DRenderer = null;
+    
+    // 多模型组
+    this.manyModelGroup = null;
   }
 
   async init() {
@@ -109,7 +114,15 @@ class renderModel {
       this.initControls();
 
       // 加载模型
-      const load = await this.loadModel(this.config.fileInfo);
+      let load = false;
+      if (this.config.modelList && this.config.modelList.length > 0) {
+          for (const modelInfo of this.config.modelList) {
+              await this.loadModel(modelInfo);
+          }
+          load = true;
+      } else if (this.config.fileInfo) {
+          load = await this.loadModel(this.config.fileInfo);
+      }
 
       // 设置场景效果
       await Promise.all([
@@ -180,27 +193,272 @@ class renderModel {
   }
   addEvenListMouseListener() {
     // 监听场景大小改变，跳转渲染尺寸
-    this.onWindowResizesListener = this.onWindowResize;
+    this.onWindowResizesListener = this.onWindowResize.bind(this);
     window.addEventListener("resize", this.onWindowResizesListener);
+    
+    // 监听点击事件
+    this.onMouseClickListener = this.onMouseClick.bind(this);
+    this.container.addEventListener("click", this.onMouseClickListener);
   }
+
+  onMouseClick(event) {
+    const { clientHeight, clientWidth, offsetLeft, offsetTop } = this.container;
+    this.mouse.x = ((event.clientX - offsetLeft) / clientWidth) * 2 - 1;
+    this.mouse.y = -((event.clientY - offsetTop) / clientHeight) * 2 + 1;
+    
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    // 递归检测所有子对象，确保能选中模型
+    const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+    
+    if (intersects.length > 0) {
+      // 获取第一个选中的对象
+      let object = intersects[0].object;
+      
+      // 尝试触发事件
+      // 如果当前对象没有事件，尝试向上查找父级（针对组合模型）
+      let currentObj = object;
+      while(currentObj) {
+          if (this.triggerEvent(currentObj)) {
+              break; // 如果触发成功，停止冒泡
+          }
+          currentObj = currentObj.parent;
+          if (currentObj && currentObj.type === 'Scene') break;
+      }
+    }
+  }
+
+  triggerEvent(mesh) {
+    if (!this.config.events) return false;
+    let eventConfig = this.config.events[mesh.uuid];
+
+    // 如果通过UUID找不到配置，尝试通过名称匹配（适用于预览模式）
+    if (!eventConfig) {
+      const events = Object.values(this.config.events);
+      eventConfig = events.find(e => e.meshName === mesh.name);
+    }
+
+    if (!eventConfig || eventConfig.clickEvent === "none") return false;
+
+    switch (eventConfig.clickEvent) {
+      case "alert":
+        if (eventConfig.alertContent) {
+          ElMessage.info(eventConfig.alertContent);
+        }
+        break;
+      case "link":
+        if (eventConfig.linkUrl) {
+          window.open(eventConfig.linkUrl, "_blank");
+        }
+        break;
+      case "color":
+        if (eventConfig.targetColor) {
+          mesh.material.color.set(eventConfig.targetColor);
+        }
+        break;
+      case "visible":
+        mesh.visible = !mesh.visible;
+        break;
+      case "flyTo":
+        {
+            const box = new THREE.Box3().setFromObject(mesh);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = this.camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+            cameraZ *= 2.0;
+
+            const direction = this.camera.position.clone().sub(center).normalize();
+            const newPos = center.clone().add(direction.multiplyScalar(cameraZ));
+
+            new TWEEN.Tween(this.camera.position)
+            .to(newPos, 1000)
+            .easing(TWEEN.Easing.Quadratic.Out)
+            .start();
+
+            new TWEEN.Tween(this.controls.target)
+            .to(center, 1000)
+            .easing(TWEEN.Easing.Quadratic.Out)
+            .start();
+        }
+        break;
+      case "animation":
+        if (eventConfig.animationName && this.modelAnimation) {
+            const clip = THREE.AnimationClip.findByName(this.modelAnimation, eventConfig.animationName);
+            if (clip) {
+                if (this.animateClipAction) this.animateClipAction.stop();
+                this.animateClipAction = this.animationMixer.clipAction(clip);
+                this.animateClipAction.setLoop(this.loopMap[eventConfig.loop || 'LoopRepeat']);
+                this.animateClipAction.play();
+            }
+        }
+        break;
+      case "explode":
+        {
+          // 1. 寻找模型根节点
+          let modelRoot = mesh;
+          while (modelRoot.parent && modelRoot.parent.type !== 'Scene') {
+              modelRoot = modelRoot.parent;
+          }
+          
+          // 辅助函数：获取配置（兼容UUID和Name）
+          const getEventConfig = (m) => {
+              if (this.config.events[m.uuid]) return this.config.events[m.uuid];
+              return Object.values(this.config.events).find(e => e.meshName === m.name);
+          };
+
+          // 2. 获取整个模型下的所有“拆解”对象
+          const targets = [];
+          modelRoot.traverse((child) => {
+               if (child.isMesh) {
+                   const childConfig = getEventConfig(child);
+                   if (childConfig && childConfig.clickEvent === 'explode') {
+                       targets.push(child);
+                   }
+               }
+          });
+
+          if (targets.length === 0) return;
+
+          // 3. 智能判断拆解模式
+          const parentBox = new THREE.Box3().setFromObject(modelRoot);
+          const parentSize = new THREE.Vector3();
+          parentBox.getSize(parentSize);
+          const parentCenter = new THREE.Vector3();
+          parentBox.getCenter(parentCenter);
+
+          const meshBox = new THREE.Box3().setFromObject(mesh);
+          const meshSize = new THREE.Vector3();
+          meshBox.getSize(meshSize);
+          const meshCenter = new THREE.Vector3();
+          meshBox.getCenter(meshCenter);
+
+          const coverageX = meshSize.x / parentSize.x;
+          const coverageZ = meshSize.z / parentSize.z;
+          
+          const rawDir = new THREE.Vector3().subVectors(meshCenter, parentCenter);
+          const distXZ = Math.sqrt(rawDir.x * rawDir.x + rawDir.z * rawDir.z);
+          const distY = Math.abs(rawDir.y);
+          
+          const isSmallPart = coverageX < 0.5 && coverageZ < 0.5;
+          const isInternal = isSmallPart && rawDir.y < 0 && distXZ < Math.max(parentSize.x, parentSize.z) * 0.3 && distY > parentSize.y * 0.1;
+
+          let activeTargets = [];
+          if (isInternal) {
+              activeTargets = [mesh];
+          } else {
+              activeTargets = targets;
+          }
+
+          const isExploded = activeTargets.some(obj => obj.userData.isExploded);
+
+          if (!isExploded) {
+              // --- 执行拆解 ---
+              activeTargets.forEach(part => {
+                  const partConfig = getEventConfig(part);
+                  const distance = partConfig.explodeDistance || 5;
+
+                  if (!part.userData.originalPos) {
+                      part.userData.originalPos = part.position.clone();
+                  }
+
+                  const pBox = new THREE.Box3().setFromObject(part);
+                  const pCenter = new THREE.Vector3();
+                  pBox.getCenter(pCenter);
+                  const pSize = new THREE.Vector3();
+                  pBox.getSize(pSize);
+
+                  let worldDir = new THREE.Vector3();
+                  
+                  const pRawDir = new THREE.Vector3().subVectors(pCenter, parentCenter);
+                  const pDistXZ = Math.sqrt(pRawDir.x * pRawDir.x + pRawDir.z * pRawDir.z);
+                  const pDistY = Math.abs(pRawDir.y);
+                  const minParentDim = Math.min(parentSize.x, parentSize.z);
+
+                  const pCovX = pSize.x / parentSize.x;
+                  const pCovZ = pSize.z / parentSize.z;
+                  
+                  const isCentered = pDistXZ < minParentDim * 0.25;
+                  const pIsLayer = pCovX > 0.6 && pCovZ > 0.6 && (pSize.y < parentSize.y * 0.8) && isCentered;
+
+                  if (pIsLayer) {
+                      const yOffset = pCenter.y - parentCenter.y;
+                      worldDir.set(0, yOffset >= -0.1 ? 1 : -1, 0);
+                  } else {
+                      const pIsSmall = pCovX < 0.5 && pCovZ < 0.5;
+                      if (pIsSmall && pRawDir.y < 0 && pDistXZ < minParentDim * 0.35 && pDistY > parentSize.y * 0.1) {
+                          worldDir.set(0, 1, 0);
+                      } else {
+                          worldDir.copy(pRawDir);
+                          if (worldDir.lengthSq() < 0.0001) worldDir.set(0, 1, 0);
+                      }
+                  }
+                  worldDir.normalize();
+
+                  const localDir = worldDir.clone();
+                  if (part.parent) {
+                      const parentWorldQuat = new THREE.Quaternion();
+                      part.parent.getWorldQuaternion(parentWorldQuat);
+                      localDir.applyQuaternion(parentWorldQuat.invert());
+                  }
+                  localDir.normalize();
+
+                  const targetPos = part.position.clone().add(localDir.multiplyScalar(distance));
+
+                  new TWEEN.Tween(part.position)
+                      .to(targetPos, 1000)
+                      .easing(TWEEN.Easing.Exponential.Out)
+                      .start();
+                  
+                  part.userData.isExploded = true;
+              });
+              if (ElMessage) ElMessage.success("模型已拆解");
+
+          } else {
+              // --- 执行还原 ---
+              activeTargets.forEach(part => {
+                  if (part.userData.originalPos) {
+                      new TWEEN.Tween(part.position)
+                          .to(part.userData.originalPos, 1000)
+                          .easing(TWEEN.Easing.Exponential.Out)
+                          .start();
+                  }
+                  part.userData.isExploded = false;
+              });
+              if (ElMessage) ElMessage.success("模型已还原");
+          }
+        }
+        break;
+    }
+  }
+
   // 创建控制器
   initControls() {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enablePan = true;
-    this.controls.enableDamping = true;
-    this.controls.target.set(0, 0, 0);
+    this.controls.enableDamping = false;
+    
+    // 恢复控制器目标点
+    const { camera } = this.config;
+    if (camera && camera.target) {
+        this.controls.target.fromArray(camera.target);
+    } else {
+        this.controls.target.set(0, 0, 0);
+    }
+    this.controls.update();
 
     //标签控制器
     this.css3dControls = new OrbitControls(this.camera, this.css3DRenderer.domElement);
     this.css3dControls.enablePan = false;
     this.css3dControls.enabled = false;
     this.css3dControls.enableDamping = false;
-    this.css3dControls.target.set(0, 0, 0);
+    this.css3dControls.target.copy(this.controls.target);
     this.css3dControls.update();
   }
   // 更新场景
   sceneAnimation() {
     this.renderAnimation = requestAnimationFrame(() => this.sceneAnimation());
+    TWEEN.update();
     const { stage, tags } = this.config;
     //辉光效果开关开启时执行
     if (stage && stage.glow) {
@@ -346,12 +604,27 @@ class renderModel {
     this.effectComposer.addPass(this.shaderPass);
   }
   // 加载模型
-  loadModel({ filePath, fileType, map }) {
-    return new Promise((resolve, reject) => {
+  loadModel({ filePath, fileType, map, position, rotation, scale, isFileStore, fileId }) {
+    return new Promise(async (resolve, reject) => {
+      let finalFilePath = filePath;
+      if (isFileStore && fileId) {
+          try {
+              const blob = await getFile(fileId);
+              if (blob) {
+                  finalFilePath = URL.createObjectURL(blob);
+              }
+          } catch (e) {
+              console.error("Failed to load file from IndexedDB", e);
+          }
+      } else if (finalFilePath && typeof finalFilePath === 'string' && !finalFilePath.startsWith("http") && !finalFilePath.startsWith("blob:") && !finalFilePath.startsWith("/")) {
+          finalFilePath = `/${finalFilePath}`;
+      }
+
       let loader;
       if (["glb", "gltf"].includes(fileType)) {
         const dracoLoader = new DRACOLoader();
-        dracoLoader.setDecoderPath(`draco/`);
+        // 使用绝对路径，避免在子路由（如 /preview）下路径解析错误
+        dracoLoader.setDecoderPath(`/draco/`);
         dracoLoader.setDecoderConfig({ type: "js" });
         dracoLoader.preload();
         loader = new GLTFLoader().setDRACOLoader(dracoLoader);
@@ -359,34 +632,62 @@ class renderModel {
         loader = this.fileLoaderMap[fileType];
       }
       loader.load(
-        filePath,
+        finalFilePath,
         result => {
+          let loadedModel;
           switch (fileType) {
             case "glb":
-              this.model = result.scene;
+              loadedModel = result.scene;
               break;
             case "fbx":
-              this.model = result;
+              loadedModel = result;
               break;
             case "gltf":
-              this.model = result.scene;
+              loadedModel = result.scene;
               break;
             case "obj":
-              this.model = result;
+              loadedModel = result;
               break;
             case "stl":
               const material = new THREE.MeshStandardMaterial();
               const mesh = new THREE.Mesh(result, material);
-              this.model = mesh;
+              loadedModel = mesh;
               break;
             default:
               break;
           }
-          this.getModelMaterialList(map);
-          this.modelAnimation = result.animations || [];
-          this.setModelPositionSize();
-          this.glowMaterialList = this.modelMaterialList.map(v => v.name);
-          this.scene.add(this.model);
+
+          // 如果是第一个模型，赋值给 this.model，否则添加到 manyModelGroup
+          if (!this.model) {
+              this.model = loadedModel;
+              this.scene.add(this.model);
+          } else {
+              if (!this.manyModelGroup) {
+                  this.manyModelGroup = new THREE.Group();
+                  this.scene.add(this.manyModelGroup);
+              }
+              this.manyModelGroup.add(loadedModel);
+          }
+
+          // 应用变换
+          if (position && rotation && scale) {
+              loadedModel.position.fromArray(position);
+              loadedModel.rotation.fromArray(rotation);
+              loadedModel.scale.fromArray(scale);
+          } else if (this.model === loadedModel) {
+              // 只有第一个模型且没有变换信息时才自动调整
+              this.setModelPositionSize();
+          }
+
+          this.getModelMaterialList(map, loadedModel);
+          
+          // 收集动画
+          if (result.animations) {
+              this.modelAnimation = (this.modelAnimation || []).concat(result.animations);
+          }
+          
+          this.glowMaterialList = (this.glowMaterialList || []).concat(this.modelMaterialList.map(v => v.name));
+          
           resolve(true);
         },
         () => {},
@@ -526,9 +827,9 @@ class renderModel {
     this.camera.updateProjectionMatrix();
   }
   // 获取当前模型材质
-  getModelMaterialList() {
-    this.modelMaterialList = [];
-    this.model.traverse(v => {
+  getModelMaterialList(map, targetModel = this.model) {
+    if (!this.modelMaterialList) this.modelMaterialList = [];
+    targetModel.traverse(v => {
       if (v.isMesh) {
         v.castShadow = true;
         v.frustumCulled = false;
@@ -751,8 +1052,15 @@ class renderModel {
   setModelAnimation() {
     const { animation } = this.config;
     if (!animation) return false;
-    if (this.modelAnimation.length && animation && animation.visible) {
-      this.animationMixer = new THREE.AnimationMixer(this.model);
+
+    // 只要有动画数据，就初始化混合器，以便后续事件调用
+    if (this.modelAnimation && this.modelAnimation.length > 0) {
+        if (!this.animationMixer) {
+            this.animationMixer = new THREE.AnimationMixer(this.model);
+        }
+    }
+
+    if (this.modelAnimation && this.modelAnimation.length > 0 && animation && animation.visible) {
       const { animationName, timeScale, weight, loop } = animation;
       // 模型动画
       const clip = THREE.AnimationClip.findByName(this.modelAnimation, animationName);
@@ -763,8 +1071,13 @@ class renderModel {
         this.animateClipAction.setLoop(this.loopMap[loop]);
         this.animateClipAction.play();
       }
-      this.animationFrameFun();
     }
+    
+    // 启动动画循环
+    if (this.animationMixer || animation.rotationVisible) {
+        this.animationFrameFun();
+    }
+
     // 轴动画
     if (animation.rotationVisible) {
       const { rotationType, rotationSpeed } = animation;

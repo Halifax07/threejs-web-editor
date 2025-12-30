@@ -180,7 +180,8 @@ watch(
 
 const onChangeEvent = () => {
   if (store.selectMesh.uuid) {
-    store.modelApi.setMeshEventData(store.selectMesh.uuid, config.value);
+    const eventConfig = { ...config.value, meshName: store.selectMesh.name };
+    store.modelApi.setMeshEventData(store.selectMesh.uuid, eventConfig);
   }
 };
 

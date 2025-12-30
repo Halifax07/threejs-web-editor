@@ -426,6 +426,10 @@ export default class MaterialModules {
         // 切换上下文
         if (rootModel !== toRaw(store.modelApi.model) && rootModel !== toRaw(geometryGroup)) {
              store.modelApi.model = rootModel;
+             // 修复多模型切换时无法选中/高亮的问题：更新 outlinePass 的渲染目标
+             if (store.modelApi.outlinePass) {
+               store.modelApi.outlinePass.renderScene = rootModel;
+             }
              store.modelApi.modelAnimation = rootModel.animations || [];
              store.modelApi.modelMaterialList = [];
              store.modelApi.originalMaterials.clear();
@@ -445,6 +449,14 @@ export default class MaterialModules {
         if (store.isPreviewMode) {
           eventModules.triggerMeshEvent(intersectedObject);
           return true;
+        }
+
+        // 图表演示模式逻辑
+        if (store.modelApi.isChartDemoMode) {
+          const meshUuid = intersectedObject.uuid;
+          store.modelApi.handleChartInteraction(meshUuid);
+          // 演示模式下不进行材质高亮等其他操作，直接返回
+          return;
         }
 
         Object.assign(outlinePass, {
