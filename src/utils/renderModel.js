@@ -147,6 +147,8 @@ class renderModel {
     this.customDataLabelMap = {};
     // 自定义数据标签的显示配置（按对象 uuid 存储），结构：{ [uuid]: { fontSize, offsetX, offsetY, offsetZ, scale } }
     this.customDataLabelConfigMap = {};
+    // 自定义数据标签的引线对象（uuid -> THREE.Line）
+    this.customDataLabelLineMap = {};
     // 当前选中的用于显示自定义数据的对象 uuid（通常是子模型）
     this.activeCustomDataUuid = null;
     // 是否一直显示所有自定义数据标签（不依赖选中状态）
@@ -204,6 +206,14 @@ class renderModel {
         }
         delete this.customDataLabelMap[uuid];
       }
+      // 同时移除引线
+      const oldLine = this.customDataLabelLineMap[uuid];
+      if (oldLine) {
+        this.scene.remove(oldLine);
+        oldLine.geometry.dispose();
+        oldLine.material.dispose();
+        delete this.customDataLabelLineMap[uuid];
+      }
       return;
     }
     const list = this.customDataMap[uuid] || [];
@@ -217,6 +227,14 @@ class renderModel {
           oldLabel.element.parentNode.removeChild(oldLabel.element);
         }
         delete this.customDataLabelMap[uuid];
+      }
+      // 同时移除引线
+      const oldLine = this.customDataLabelLineMap[uuid];
+      if (oldLine) {
+        this.scene.remove(oldLine);
+        oldLine.geometry.dispose();
+        oldLine.material.dispose();
+        delete this.customDataLabelLineMap[uuid];
       }
       return;
     }
@@ -238,6 +256,8 @@ class renderModel {
     const offsetY = config.offsetY != null ? config.offsetY : size.y * 0.6 || 0.5;
     const offsetZ = config.offsetZ != null ? config.offsetZ : 0;
     const scale = config.scale != null ? config.scale : 0.01;
+    const showLine = config.showLine != null ? config.showLine : true;
+    const lineColor = config.lineColor != null ? config.lineColor : "#ffffff";
 
     // 生成显示文本：一行一个“名称: 值 单位”
     const lines = list.map(item => {
@@ -289,8 +309,38 @@ class renderModel {
     }
 
     // 应用位置偏移和缩放
-    labelObject.position.copy(center.clone().add(new THREE.Vector3(offsetX, offsetY, offsetZ)));
+    const labelPosition = center.clone().add(new THREE.Vector3(offsetX, offsetY, offsetZ));
+    labelObject.position.copy(labelPosition);
     labelObject.scale.set(scale, scale, scale);
+
+    // 创建或更新引线
+    if (showLine && (offsetX !== 0 || offsetY !== 0 || offsetZ !== 0)) {
+      let line = this.customDataLabelLineMap[uuid];
+      if (!line) {
+        // 创建引线几何体和材质
+        const geometry = new THREE.BufferGeometry();
+        const material = new THREE.LineBasicMaterial({ color: lineColor, linewidth: 1 });
+        line = new THREE.Line(geometry, material);
+        this.customDataLabelLineMap[uuid] = line;
+        this.scene.add(line);
+      } else {
+        // 更新引线颜色
+        line.material.color.set(lineColor);
+      }
+      
+      // 更新引线位置：从模型中心到标签位置
+      const points = [center, labelPosition];
+      line.geometry.setFromPoints(points);
+    } else {
+      // 如果不需要显示引线或偏移为0，则移除引线
+      const oldLine = this.customDataLabelLineMap[uuid];
+      if (oldLine) {
+        this.scene.remove(oldLine);
+        oldLine.geometry.dispose();
+        oldLine.material.dispose();
+        delete this.customDataLabelLineMap[uuid];
+      }
+    }
   }
 
   /**
@@ -320,6 +370,14 @@ class renderModel {
         }
       }
       delete this.customDataLabelMap[key];
+      // 同时清理引线
+      const line = this.customDataLabelLineMap[key];
+      if (line) {
+        this.scene.remove(line);
+        line.geometry.dispose();
+        line.material.dispose();
+        delete this.customDataLabelLineMap[key];
+      }
     });
 
     // 若当前有选中对象且存在自定义数据，则为其重新创建标签
@@ -427,7 +485,9 @@ class renderModel {
       offsetX: 0,
       offsetY: size.y * 0.6 || 0.5,
       offsetZ: 0,
-      scale: 0.01
+      scale: 0.01,
+      showLine: true,
+      lineColor: "#ffffff"
     };
   }
 

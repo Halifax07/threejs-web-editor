@@ -161,6 +161,23 @@
         </div>
       </div>
       <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>显示引线</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-switch v-model="labelConfig.showLine" @change="onLabelConfigChange" />
+          <span class="switch-tip">开启后，将显示从模型中心到标签位置的引线</span>
+        </div>
+      </div>
+      <div class="option" v-if="labelConfig.showLine">
+        <div class="grid-txt">
+          <el-button type="primary" link>引线颜色</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-color-picker v-model="labelConfig.lineColor" @change="onLabelConfigChange" />
+        </div>
+      </div>
+      <div class="option">
         <el-button type="default" size="small" @click="onResetLabelConfig">重置为默认值</el-button>
       </div>
     </div>
@@ -194,7 +211,9 @@ const labelConfig = reactive({
   offsetX: 0,
   offsetY: 0.5,
   offsetZ: 0,
-  scale: 0.01
+  scale: 0.01,
+  showLine: true,
+  lineColor: "#ffffff"
 });
 
 // 从 modelApi 读取当前对象的自定义数据
@@ -235,6 +254,8 @@ const refreshLabelConfigFromApi = () => {
     labelConfig.offsetY = 0.5;
     labelConfig.offsetZ = 0;
     labelConfig.scale = 0.01;
+    labelConfig.showLine = true;
+    labelConfig.lineColor = "#ffffff";
     return;
   }
   if (typeof store.modelApi.getCustomDataLabelConfig !== "function") {
@@ -247,6 +268,8 @@ const refreshLabelConfigFromApi = () => {
     labelConfig.offsetY = config.offsetY != null ? config.offsetY : 0.5;
     labelConfig.offsetZ = config.offsetZ != null ? config.offsetZ : 0;
     labelConfig.scale = config.scale != null ? config.scale : 0.01;
+    labelConfig.showLine = config.showLine != null ? config.showLine : true;
+    labelConfig.lineColor = config.lineColor || "#ffffff";
   }
 };
 
@@ -307,7 +330,9 @@ const onLabelConfigChange = () => {
     offsetX: labelConfig.offsetX,
     offsetY: labelConfig.offsetY,
     offsetZ: labelConfig.offsetZ,
-    scale: labelConfig.scale
+    scale: labelConfig.scale,
+    showLine: labelConfig.showLine,
+    lineColor: labelConfig.lineColor
   });
 };
 
@@ -324,6 +349,8 @@ const onResetLabelConfig = () => {
     labelConfig.offsetY = size.y * 0.6 || 0.5;
     labelConfig.offsetZ = 0;
     labelConfig.scale = 0.01;
+    labelConfig.showLine = true;
+    labelConfig.lineColor = "#ffffff";
     onLabelConfigChange();
   }
 };
