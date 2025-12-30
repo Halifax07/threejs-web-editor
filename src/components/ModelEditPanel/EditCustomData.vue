@@ -66,9 +66,23 @@
     </div>
 
     <!-- 标签显示配置 -->
-    <div class="options" v-if="currentTargetUuid">
+    <div class="options">
       <div class="header sub-header">
         <span> 标签显示设置 </span>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>预览模式</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-switch v-model="alwaysShowLabels" @change="onAlwaysShowChange" />
+          <span class="switch-tip">开启后，所有已添加数据的模型标签将一直显示，无需选中</span>
+        </div>
+      </div>
+    </div>
+    <div class="options" v-if="currentTargetUuid">
+      <div class="header sub-header">
+        <span> 当前标签样式设置 </span>
       </div>
       <div class="option">
         <div class="grid-txt">
@@ -154,7 +168,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useMeshEditStore } from "@/store/meshEditStore";
 import * as THREE from "three";
 
@@ -170,6 +184,9 @@ const state = reactive({
 });
 
 const paramList = computed(() => state.paramList);
+
+// 是否一直显示所有标签
+const alwaysShowLabels = ref(false);
 
 // 标签显示配置
 const labelConfig = reactive({
@@ -198,6 +215,15 @@ const refreshParamsFromApi = () => {
     value: item.value || "",
     unit: item.unit || ""
   }));
+};
+
+// 从 modelApi 读取一直显示状态
+const refreshAlwaysShowFromApi = () => {
+  if (!store.modelApi || typeof store.modelApi.getAlwaysShowCustomDataLabels !== "function") {
+    alwaysShowLabels.value = false;
+    return;
+  }
+  alwaysShowLabels.value = store.modelApi.getAlwaysShowCustomDataLabels() || false;
 };
 
 // 从 modelApi 读取当前对象的标签显示配置
@@ -233,6 +259,9 @@ watch(
   },
   { immediate: true }
 );
+
+// 初始化时读取一直显示状态
+refreshAlwaysShowFromApi();
 
 // 新增参数
 const onAddParam = () => {
@@ -298,6 +327,12 @@ const onResetLabelConfig = () => {
     onLabelConfigChange();
   }
 };
+
+// 一直显示开关变化
+const onAlwaysShowChange = () => {
+  if (!store.modelApi || typeof store.modelApi.setAlwaysShowCustomDataLabels !== "function") return;
+  store.modelApi.setAlwaysShowCustomDataLabels(alwaysShowLabels.value);
+};
 </script>
 
 <style scoped lang="scss">
@@ -344,6 +379,11 @@ const onResetLabelConfig = () => {
   }
   .param-table {
     margin-top: 4px;
+  }
+  .switch-tip {
+    margin-left: 8px;
+    color: #909399;
+    font-size: 12px;
   }
 }
 </style>

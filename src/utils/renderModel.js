@@ -149,6 +149,8 @@ class renderModel {
     this.customDataLabelConfigMap = {};
     // 当前选中的用于显示自定义数据的对象 uuid（通常是子模型）
     this.activeCustomDataUuid = null;
+    // 是否一直显示所有自定义数据标签（不依赖选中状态）
+    this.alwaysShowCustomDataLabels = false;
     // 当前拖拽模型信息
     this.activeDragManyModel = {};
     // 背景模块实例
@@ -191,8 +193,8 @@ class renderModel {
    */
   updateCustomDataLabel(uuid) {
     if (!uuid) return;
-    // 仅对当前选中的对象显示标签
-    if (this.activeCustomDataUuid && uuid !== this.activeCustomDataUuid) {
+    // 如果不是一直显示模式，仅对当前选中的对象显示标签
+    if (!this.alwaysShowCustomDataLabels && this.activeCustomDataUuid && uuid !== this.activeCustomDataUuid) {
       // 如果不是当前活动对象，则移除其标签
       const oldLabel = this.customDataLabelMap[uuid];
       if (oldLabel) {
@@ -297,6 +299,17 @@ class renderModel {
    */
   onSelectedMeshChanged(uuid) {
     this.activeCustomDataUuid = uuid || null;
+    
+    // 如果开启了一直显示模式，更新所有有数据的对象的标签
+    if (this.alwaysShowCustomDataLabels) {
+      Object.keys(this.customDataMap).forEach(key => {
+        if (this.customDataMap[key] && this.customDataMap[key].length > 0) {
+          this.updateCustomDataLabel(key);
+        }
+      });
+      return;
+    }
+    
     // 清理所有已有标签
     Object.keys(this.customDataLabelMap).forEach(key => {
       const label = this.customDataLabelMap[key];
@@ -439,6 +452,49 @@ class renderModel {
     }
     // 更新标签显示
     this.updateCustomDataLabel(uuid);
+  }
+
+  /**
+   * 设置是否一直显示所有自定义数据标签
+   * @param {boolean} alwaysShow 是否一直显示
+   */
+  setAlwaysShowCustomDataLabels(alwaysShow) {
+    this.alwaysShowCustomDataLabels = alwaysShow;
+    
+    if (alwaysShow) {
+      // 开启一直显示模式：为所有有数据的对象创建/更新标签
+      Object.keys(this.customDataMap).forEach(uuid => {
+        if (this.customDataMap[uuid] && this.customDataMap[uuid].length > 0) {
+          this.updateCustomDataLabel(uuid);
+        }
+      });
+    } else {
+      // 关闭一直显示模式：只显示当前选中对象的标签
+      // 清理所有标签
+      Object.keys(this.customDataLabelMap).forEach(key => {
+        const label = this.customDataLabelMap[key];
+        if (label) {
+          this.scene.remove(label);
+          if (label.element && label.element.parentNode) {
+            label.element.parentNode.removeChild(label.element);
+          }
+        }
+        delete this.customDataLabelMap[key];
+      });
+      
+      // 如果当前有选中对象且存在自定义数据，则为其创建标签
+      if (this.activeCustomDataUuid && this.customDataMap[this.activeCustomDataUuid]?.length) {
+        this.updateCustomDataLabel(this.activeCustomDataUuid);
+      }
+    }
+  }
+
+  /**
+   * 获取是否一直显示所有自定义数据标签
+   * @returns {boolean}
+   */
+  getAlwaysShowCustomDataLabels() {
+    return this.alwaysShowCustomDataLabels;
   }
 
   /**
