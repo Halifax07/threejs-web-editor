@@ -145,8 +145,14 @@ class renderModel {
     this.customDataMap = {};
     // 自定义数据对应的 3D 文本对象（uuid -> CSS3DObject）
     this.customDataLabelMap = {};
+    // 自定义数据标签的显示配置（按对象 uuid 存储），结构：{ [uuid]: { fontSize, offsetX, offsetY, offsetZ, scale } }
+    this.customDataLabelConfigMap = {};
+    // 自定义数据标签的引线对象（uuid -> THREE.Line）
+    this.customDataLabelLineMap = {};
     // 当前选中的用于显示自定义数据的对象 uuid（通常是子模型）
     this.activeCustomDataUuid = null;
+    // 是否一直显示所有自定义数据标签（不依赖选中状态）
+    this.alwaysShowCustomDataLabels = false;
     // 当前拖拽模型信息
     this.activeDragManyModel = {};
     // 背景模块实例
@@ -189,8 +195,8 @@ class renderModel {
    */
   updateCustomDataLabel(uuid) {
     if (!uuid) return;
-    // 仅对当前选中的对象显示标签
-    if (this.activeCustomDataUuid && uuid !== this.activeCustomDataUuid) {
+    // 如果不是一直显示模式，仅对当前选中的对象显示标签
+    if (!this.alwaysShowCustomDataLabels && this.activeCustomDataUuid && uuid !== this.activeCustomDataUuid) {
       // 如果不是当前活动对象，则移除其标签
       const oldLabel = this.customDataLabelMap[uuid];
       if (oldLabel) {
@@ -199,6 +205,14 @@ class renderModel {
           oldLabel.element.parentNode.removeChild(oldLabel.element);
         }
         delete this.customDataLabelMap[uuid];
+      }
+      // 同时移除引线
+      const oldLine = this.customDataLabelLineMap[uuid];
+      if (oldLine) {
+        this.scene.remove(oldLine);
+        oldLine.geometry.dispose();
+        oldLine.material.dispose();
+        delete this.customDataLabelLineMap[uuid];
       }
       return;
     }
@@ -214,6 +228,14 @@ class renderModel {
         }
         delete this.customDataLabelMap[uuid];
       }
+      // 同时移除引线
+      const oldLine = this.customDataLabelLineMap[uuid];
+      if (oldLine) {
+        this.scene.remove(oldLine);
+        oldLine.geometry.dispose();
+        oldLine.material.dispose();
+        delete this.customDataLabelLineMap[uuid];
+      }
       return;
     }
 
@@ -225,6 +247,17 @@ class renderModel {
     // 计算对象中心位置
     const box = new THREE.Box3().setFromObject(obj);
     const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+
+    // 获取标签显示配置（默认值）
+    const config = this.customDataLabelConfigMap[uuid] || {};
+    const fontSize = config.fontSize != null ? config.fontSize : 11;
+    const offsetX = config.offsetX != null ? config.offsetX : 0;
+    const offsetY = config.offsetY != null ? config.offsetY : size.y * 0.6 || 0.5;
+    const offsetZ = config.offsetZ != null ? config.offsetZ : 0;
+    const scale = config.scale != null ? config.scale : 0.01;
+    const showLine = config.showLine != null ? config.showLine : true;
+    const lineColor = config.lineColor != null ? config.lineColor : "#ffffff";
 
     // 生成显示文本：一行一个“名称: 值 单位”
     const lines = list.map(item => {
@@ -250,7 +283,6 @@ class renderModel {
         borderRadius: "4px",
         background: "rgba(0, 0, 0, 0.75)",
         color: "#e5eaf3",
-        fontSize: "11px",
         lineHeight: "1.4",
         boxShadow: "0 0 6px rgba(0,0,0,0.6)",
         pointerEvents: "none",
@@ -259,6 +291,9 @@ class renderModel {
         textAlign: "left"
       });
     }
+
+    // 应用字体大小
+    element.style.fontSize = `${fontSize}px`;
 
     lines.forEach(text => {
       const lineDom = document.createElement("div");
@@ -273,8 +308,39 @@ class renderModel {
       this.scene.add(labelObject);
     }
 
-    labelObject.position.copy(center.clone().add(new THREE.Vector3(0, box.getSize(new THREE.Vector3()).y * 0.6 || 0.5, 0)));
-    labelObject.scale.set(0.01, 0.01, 0.01);
+    // 应用位置偏移和缩放
+    const labelPosition = center.clone().add(new THREE.Vector3(offsetX, offsetY, offsetZ));
+    labelObject.position.copy(labelPosition);
+    labelObject.scale.set(scale, scale, scale);
+
+    // 创建或更新引线
+    if (showLine && (offsetX !== 0 || offsetY !== 0 || offsetZ !== 0)) {
+      let line = this.customDataLabelLineMap[uuid];
+      if (!line) {
+        // 创建引线几何体和材质
+        const geometry = new THREE.BufferGeometry();
+        const material = new THREE.LineBasicMaterial({ color: lineColor, linewidth: 1 });
+        line = new THREE.Line(geometry, material);
+        this.customDataLabelLineMap[uuid] = line;
+        this.scene.add(line);
+      } else {
+        // 更新引线颜色
+        line.material.color.set(lineColor);
+      }
+      
+      // 更新引线位置：从模型中心到标签位置
+      const points = [center, labelPosition];
+      line.geometry.setFromPoints(points);
+    } else {
+      // 如果不需要显示引线或偏移为0，则移除引线
+      const oldLine = this.customDataLabelLineMap[uuid];
+      if (oldLine) {
+        this.scene.remove(oldLine);
+        oldLine.geometry.dispose();
+        oldLine.material.dispose();
+        delete this.customDataLabelLineMap[uuid];
+      }
+    }
   }
 
   /**
@@ -283,6 +349,17 @@ class renderModel {
    */
   onSelectedMeshChanged(uuid) {
     this.activeCustomDataUuid = uuid || null;
+    
+    // 如果开启了一直显示模式，更新所有有数据的对象的标签
+    if (this.alwaysShowCustomDataLabels) {
+      Object.keys(this.customDataMap).forEach(key => {
+        if (this.customDataMap[key] && this.customDataMap[key].length > 0) {
+          this.updateCustomDataLabel(key);
+        }
+      });
+      return;
+    }
+    
     // 清理所有已有标签
     Object.keys(this.customDataLabelMap).forEach(key => {
       const label = this.customDataLabelMap[key];
@@ -293,6 +370,14 @@ class renderModel {
         }
       }
       delete this.customDataLabelMap[key];
+      // 同时清理引线
+      const line = this.customDataLabelLineMap[key];
+      if (line) {
+        this.scene.remove(line);
+        line.geometry.dispose();
+        line.material.dispose();
+        delete this.customDataLabelLineMap[key];
+      }
     });
 
     // 若当前有选中对象且存在自定义数据，则为其重新创建标签
@@ -377,6 +462,120 @@ class renderModel {
       obj.userData.customData = this.customDataMap[uuid];
     }
     this.updateCustomDataLabel(uuid);
+  }
+
+  /**
+   * 获取指定对象的标签显示配置
+   * @param {string} uuid three 对象 uuid
+   * @returns {{fontSize:number,offsetX:number,offsetY:number,offsetZ:number,scale:number}}
+   */
+  getCustomDataLabelConfig(uuid) {
+    if (!uuid) return null;
+    const config = this.customDataLabelConfigMap[uuid];
+    if (config) {
+      return { ...config };
+    }
+    // 返回默认配置
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (!obj) return null;
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    return {
+      fontSize: 11,
+      offsetX: 0,
+      offsetY: size.y * 0.6 || 0.5,
+      offsetZ: 0,
+      scale: 0.01,
+      showLine: true,
+      lineColor: "#ffffff"
+    };
+  }
+
+  /**
+   * 更新指定对象的标签显示配置
+   * @param {string} uuid three 对象 uuid
+   * @param {{fontSize?:number,offsetX?:number,offsetY?:number,offsetZ?:number,scale?:number}} config
+   */
+  updateCustomDataLabelConfig(uuid, config = {}) {
+    if (!uuid) return;
+    if (!this.customDataLabelConfigMap[uuid]) {
+      this.customDataLabelConfigMap[uuid] = {};
+    }
+    // 合并配置
+    Object.assign(this.customDataLabelConfigMap[uuid], config);
+    // 同步到 three 对象 userData
+    const obj = this.scene.getObjectByProperty("uuid", uuid);
+    if (obj) {
+      if (!obj.userData) obj.userData = {};
+      if (!obj.userData.customDataLabelConfig) obj.userData.customDataLabelConfig = {};
+      Object.assign(obj.userData.customDataLabelConfig, this.customDataLabelConfigMap[uuid]);
+    }
+    // 更新标签显示
+    this.updateCustomDataLabel(uuid);
+  }
+
+  /**
+   * 设置是否一直显示所有自定义数据标签
+   * @param {boolean} alwaysShow 是否一直显示
+   */
+  setAlwaysShowCustomDataLabels(alwaysShow) {
+    this.alwaysShowCustomDataLabels = alwaysShow;
+    
+    if (alwaysShow) {
+      // 开启一直显示模式：为所有有数据的对象创建/更新标签
+      Object.keys(this.customDataMap).forEach(uuid => {
+        if (this.customDataMap[uuid] && this.customDataMap[uuid].length > 0) {
+          this.updateCustomDataLabel(uuid);
+        }
+      });
+    } else {
+      // 关闭一直显示模式：只显示当前选中对象的标签
+      // 清理所有标签
+      Object.keys(this.customDataLabelMap).forEach(key => {
+        const label = this.customDataLabelMap[key];
+        if (label) {
+          this.scene.remove(label);
+          if (label.element && label.element.parentNode) {
+            label.element.parentNode.removeChild(label.element);
+          }
+        }
+        delete this.customDataLabelMap[key];
+      });
+      
+      // 如果当前有选中对象且存在自定义数据，则为其创建标签
+      if (this.activeCustomDataUuid && this.customDataMap[this.activeCustomDataUuid]?.length) {
+        this.updateCustomDataLabel(this.activeCustomDataUuid);
+      }
+    }
+  }
+
+  /**
+   * 获取是否一直显示所有自定义数据标签
+   * @returns {boolean}
+   */
+  getAlwaysShowCustomDataLabels() {
+    return this.alwaysShowCustomDataLabels;
+  }
+
+  /**
+   * 从 three 对象的 userData 恢复自定义数据和标签配置（用于加载已保存的场景）
+   * @param {THREE.Object3D} obj three 对象
+   */
+  restoreCustomDataFromUserData(obj) {
+    if (!obj || !obj.uuid) return;
+    // 恢复自定义数据
+    if (obj.userData?.customData && Array.isArray(obj.userData.customData)) {
+      this.customDataMap[obj.uuid] = obj.userData.customData.map(item => ({
+        id: item.id || `${obj.uuid}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        name: item.name || "",
+        value: item.value != null ? String(item.value) : "",
+        unit: item.unit || ""
+      }));
+    }
+    // 恢复标签显示配置
+    if (obj.userData?.customDataLabelConfig) {
+      this.customDataLabelConfigMap[obj.uuid] = { ...obj.userData.customDataLabelConfig };
+    }
   }
 
   init() {

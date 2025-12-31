@@ -64,12 +64,130 @@
       </el-table>
       <el-empty v-else description="请先在场景中选中要标注数据的模型" :image-size="100" />
     </div>
+
+    <!-- 标签显示配置 -->
+    <div class="options">
+      <div class="header sub-header">
+        <span> 标签显示设置 </span>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>预览模式</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-switch v-model="alwaysShowLabels" @change="onAlwaysShowChange" />
+          <span class="switch-tip">开启后，所有已添加数据的模型标签将一直显示，无需选中</span>
+        </div>
+      </div>
+    </div>
+    <div class="options" v-if="currentTargetUuid">
+      <div class="header sub-header">
+        <span> 当前标签样式设置 </span>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>字体大小</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.fontSize"
+            :min="8"
+            :max="24"
+            :step="1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>位置偏移 X</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.offsetX"
+            :min="-5"
+            :max="5"
+            :step="0.1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>位置偏移 Y</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.offsetY"
+            :min="-5"
+            :max="5"
+            :step="0.1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>位置偏移 Z</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.offsetZ"
+            :min="-5"
+            :max="5"
+            :step="0.1"
+            show-input
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>标签缩放</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-slider
+            v-model="labelConfig.scale"
+            :min="0.005"
+            :max="0.05"
+            :step="0.001"
+            show-input
+            :format-tooltip="val => val.toFixed(3)"
+            @change="onLabelConfigChange"
+          />
+        </div>
+      </div>
+      <div class="option">
+        <div class="grid-txt">
+          <el-button type="primary" link>显示引线</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-switch v-model="labelConfig.showLine" @change="onLabelConfigChange" />
+          <span class="switch-tip">开启后，将显示从模型中心到标签位置的引线</span>
+        </div>
+      </div>
+      <div class="option" v-if="labelConfig.showLine">
+        <div class="grid-txt">
+          <el-button type="primary" link>引线颜色</el-button>
+        </div>
+        <div class="grid-sidle">
+          <el-color-picker v-model="labelConfig.lineColor" @change="onLabelConfigChange" />
+        </div>
+      </div>
+      <div class="option">
+        <el-button type="default" size="small" @click="onResetLabelConfig">重置为默认值</el-button>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useMeshEditStore } from "@/store/meshEditStore";
+import * as THREE from "three";
 
 const store = useMeshEditStore();
 
@@ -83,6 +201,20 @@ const state = reactive({
 });
 
 const paramList = computed(() => state.paramList);
+
+// 是否一直显示所有标签
+const alwaysShowLabels = ref(false);
+
+// 标签显示配置
+const labelConfig = reactive({
+  fontSize: 11,
+  offsetX: 0,
+  offsetY: 0.5,
+  offsetZ: 0,
+  scale: 0.01,
+  showLine: true,
+  lineColor: "#ffffff"
+});
 
 // 从 modelApi 读取当前对象的自定义数据
 const refreshParamsFromApi = () => {
@@ -104,14 +236,55 @@ const refreshParamsFromApi = () => {
   }));
 };
 
-// 监听选中模型变化，自动刷新参数列表
+// 从 modelApi 读取一直显示状态
+const refreshAlwaysShowFromApi = () => {
+  if (!store.modelApi || typeof store.modelApi.getAlwaysShowCustomDataLabels !== "function") {
+    alwaysShowLabels.value = false;
+    return;
+  }
+  alwaysShowLabels.value = store.modelApi.getAlwaysShowCustomDataLabels() || false;
+};
+
+// 从 modelApi 读取当前对象的标签显示配置
+const refreshLabelConfigFromApi = () => {
+  if (!store.modelApi || !currentTargetUuid.value) {
+    // 重置为默认值
+    labelConfig.fontSize = 11;
+    labelConfig.offsetX = 0;
+    labelConfig.offsetY = 0.5;
+    labelConfig.offsetZ = 0;
+    labelConfig.scale = 0.01;
+    labelConfig.showLine = true;
+    labelConfig.lineColor = "#ffffff";
+    return;
+  }
+  if (typeof store.modelApi.getCustomDataLabelConfig !== "function") {
+    return;
+  }
+  const config = store.modelApi.getCustomDataLabelConfig(currentTargetUuid.value);
+  if (config) {
+    labelConfig.fontSize = config.fontSize || 11;
+    labelConfig.offsetX = config.offsetX != null ? config.offsetX : 0;
+    labelConfig.offsetY = config.offsetY != null ? config.offsetY : 0.5;
+    labelConfig.offsetZ = config.offsetZ != null ? config.offsetZ : 0;
+    labelConfig.scale = config.scale != null ? config.scale : 0.01;
+    labelConfig.showLine = config.showLine != null ? config.showLine : true;
+    labelConfig.lineColor = config.lineColor || "#ffffff";
+  }
+};
+
+// 监听选中模型变化，自动刷新参数列表和标签配置
 watch(
   () => currentTargetUuid.value,
   () => {
     refreshParamsFromApi();
+    refreshLabelConfigFromApi();
   },
   { immediate: true }
 );
+
+// 初始化时读取一直显示状态
+refreshAlwaysShowFromApi();
 
 // 新增参数
 const onAddParam = () => {
@@ -146,6 +319,46 @@ const onDeleteParam = index => {
 const onChange = () => {
   if (!store.modelApi || typeof store.modelApi.updateCustomDataForObject !== "function") return;
   store.modelApi.updateCustomDataForObject(currentTargetUuid.value, state.paramList);
+};
+
+// 标签配置变更
+const onLabelConfigChange = () => {
+  if (!store.modelApi || typeof store.modelApi.updateCustomDataLabelConfig !== "function") return;
+  if (!currentTargetUuid.value) return;
+  store.modelApi.updateCustomDataLabelConfig(currentTargetUuid.value, {
+    fontSize: labelConfig.fontSize,
+    offsetX: labelConfig.offsetX,
+    offsetY: labelConfig.offsetY,
+    offsetZ: labelConfig.offsetZ,
+    scale: labelConfig.scale,
+    showLine: labelConfig.showLine,
+    lineColor: labelConfig.lineColor
+  });
+};
+
+// 重置标签配置为默认值
+const onResetLabelConfig = () => {
+  if (!store.modelApi || !currentTargetUuid.value) return;
+  // 获取对象的默认配置（基于包围盒）
+  const obj = store.modelApi.scene?.getObjectByProperty("uuid", currentTargetUuid.value);
+  if (obj) {
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    labelConfig.fontSize = 11;
+    labelConfig.offsetX = 0;
+    labelConfig.offsetY = size.y * 0.6 || 0.5;
+    labelConfig.offsetZ = 0;
+    labelConfig.scale = 0.01;
+    labelConfig.showLine = true;
+    labelConfig.lineColor = "#ffffff";
+    onLabelConfigChange();
+  }
+};
+
+// 一直显示开关变化
+const onAlwaysShowChange = () => {
+  if (!store.modelApi || typeof store.modelApi.setAlwaysShowCustomDataLabels !== "function") return;
+  store.modelApi.setAlwaysShowCustomDataLabels(alwaysShowLabels.value);
 };
 </script>
 
@@ -193,6 +406,11 @@ const onChange = () => {
   }
   .param-table {
     margin-top: 4px;
+  }
+  .switch-tip {
+    margin-left: 8px;
+    color: #909399;
+    font-size: 12px;
   }
 }
 </style>
